@@ -59,10 +59,10 @@ void main() {
             screen_reader_output(echo_on ? "Echo on." : "Echo off.", true);
         }
         bool changed = false;
-        if (key_pressed(KEY_UP))    { delay    = min(0.207, delay    + 0.01); changed = true; }
-        if (key_pressed(KEY_DOWN))  { delay    = max(0.0,   delay    - 0.01); changed = true; }
-        if (key_pressed(KEY_RIGHT)) { feedback = min(1.0,   feedback + 0.05); changed = true; }
-        if (key_pressed(KEY_LEFT))  { feedback = max(0.0,   feedback - 0.05); changed = true; }
+        if (key_pressed(KEY_UP))    { delay    = dmin(0.207, delay    + 0.01); changed = true; }
+        if (key_pressed(KEY_DOWN))  { delay    = dmax(0.0,   delay    - 0.01); changed = true; }
+        if (key_pressed(KEY_RIGHT)) { feedback = dmin(1.0,   feedback + 0.05); changed = true; }
+        if (key_pressed(KEY_LEFT))  { feedback = dmax(0.0,   feedback - 0.05); changed = true; }
         if (changed) {
             echo.set_f(AL_ECHO_DELAY,    delay);
             echo.set_f(AL_ECHO_FEEDBACK, feedback);

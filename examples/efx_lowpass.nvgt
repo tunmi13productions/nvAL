@@ -51,8 +51,8 @@ void main() {
             src.set_direct_filter(filter_on ? lp : null);
             screen_reader_output(filter_on ? "Lowpass on (muffled)." : "Lowpass off (clear).", true);
         }
-        if (key_pressed(KEY_UP))   { gainhf = min(1.0, gainhf + 0.05); lp.set_f(AL_LOWPASS_GAINHF, gainhf); if (filter_on) src.set_direct_filter(lp); screen_reader_output("gainhf " + round(gainhf, 2), true); }
-        if (key_pressed(KEY_DOWN)) { gainhf = max(0.0, gainhf - 0.05); lp.set_f(AL_LOWPASS_GAINHF, gainhf); if (filter_on) src.set_direct_filter(lp); screen_reader_output("gainhf " + round(gainhf, 2), true); }
+        if (key_pressed(KEY_UP))   { gainhf = dmin(1.0, gainhf + 0.05); lp.set_f(AL_LOWPASS_GAINHF, gainhf); if (filter_on) src.set_direct_filter(lp); screen_reader_output("gainhf " + round(gainhf, 2), true); }
+        if (key_pressed(KEY_DOWN)) { gainhf = dmax(0.0, gainhf - 0.05); lp.set_f(AL_LOWPASS_GAINHF, gainhf); if (filter_on) src.set_direct_filter(lp); screen_reader_output("gainhf " + round(gainhf, 2), true); }
     }
     src.stop();
 }
