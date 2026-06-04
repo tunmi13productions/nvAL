@@ -1,0 +1,697 @@
+// al_sound_pool.nvgt — OpenAL source pool for nvAL
+//
+// Include wav_loader.nvgt and opus_loader.nvgt before this file.
+// .wav files are loaded via load_wav(); .ogg/.opus/.flac and anything else
+// audio_decoder supports are loaded via load_opus().
+
+// -----------------------------------------------------------------------
+// Per-slot metadata (internal)
+// -----------------------------------------------------------------------
+
+class al_pool_slot {
+    al_buffer@ buf;      // currently assigned buffer (null = slot is free)
+    string     filename; // cache key (empty for buffer-only play)
+    string     owner;    // optional tag for bulk operations
+    bool       looping;
+    bool       persistent; // if true, not recycled automatically
+    bool       paused;
+
+    al_pool_slot() { reset(); }
+
+    void reset() {
+        @buf       = null;
+        filename   = "";
+        owner      = "";
+        looping    = false;
+        persistent = false;
+        paused     = false;
+    }
+
+    // Returns true when this slot can be recycled.
+    bool is_free(al_source@ src) {
+        if (@buf == null)  return true;   // never used
+        if (persistent)    return false;  // explicitly pinned
+        if (looping)       return false;  // loops until stopped
+        if (paused)        return false;  // user may want to resume
+        return src.is_stopped;            // one-shot that finished naturally
+    }
+}
+
+// -----------------------------------------------------------------------
+// al_sound_pool
+// -----------------------------------------------------------------------
+
+class al_sound_pool {
+    al_context@ ctx;
+    al_device@  dev;           // optional — required for HRTF methods
+    array<al_source@>   srcs;  // pre-allocated OpenAL sources
+    array<al_pool_slot> slots; // metadata parallel to srcs[]
+
+    // Buffer cache — one al_buffer per unique filename.
+    array<string>     cache_names;
+    array<al_buffer@> cache_bufs;
+
+    // Defaults applied to every new source. Change before calling play().
+    float reference_distance; // distance at which gain = 1.0  (default 1.0)
+    float rolloff_factor;     // rate of gain falloff with distance (default 1.0)
+    float max_distance;       // 0 = no hard cutoff (default 0.0)
+    float default_gain;       // gain for sources that don't specify one (default 1.0)
+
+    // Global EFX — applied to every source on play(). Up to 4 aux sends.
+    array<al_aux_slot@> global_effects;
+    array<al_filter@>   global_send_filters;
+    al_filter@ global_direct_filter;
+
+    al_sound_pool(al_context@ ctx, al_device@ dev = null, int capacity = 32) {
+        @this.ctx          = ctx;
+        @this.dev          = dev;
+        reference_distance = 1.0;
+        rolloff_factor     = 1.0;
+        max_distance       = 0.0;
+        default_gain       = 1.0;
+        global_effects.resize(4);
+        global_send_filters.resize(4);
+        srcs.resize(capacity);
+        slots.resize(capacity);
+        for (int i = 0; i < capacity; i++)
+            @srcs[i] = al_source(ctx);
+    }
+
+    // ----------------------------------------------------------------
+    // Buffer cache
+    // ----------------------------------------------------------------
+
+    // Return a cached buffer for filename, loading and caching it on first use.
+    // .wav files use load_wav(); everything else (.ogg, .opus, .flac, etc.) uses load_opus().
+    al_buffer@ get_buffer(const string& in filename) {
+        for (uint i = 0; i < cache_names.length(); i++) {
+            if (cache_names[i] == filename)
+                return cache_bufs[i];
+        }
+        string pcm, err;
+        int fmt, sr;
+        int dot = filename.find_last(".");
+        string ext = dot >= 0 ? filename.substr(dot + 1).lower() : "";
+        bool ok = (ext == "wav") ? load_wav(filename, pcm, fmt, sr, err)
+                                 : load_opus(filename, pcm, fmt, sr, err);
+        if (!ok) return null;
+        al_buffer@ buf = al_buffer(ctx);
+        if (!buf.set_data(pcm, fmt, sr))
+            return null;
+        cache_names.insert_last(filename);
+        cache_bufs.insert_last(buf);
+        return buf;
+    }
+
+    // Pre-decode a file into the cache without playing it.
+    // Returns true if the file loaded successfully (or was already cached).
+    bool preload(const string& in filename) {
+        return @get_buffer(filename) != null;
+    }
+
+    // Remove a file from the cache and stop any sources currently using it.
+    void unload(const string& in filename) {
+        for (uint i = 0; i < cache_names.length(); i++) {
+            if (cache_names[i] == filename) {
+                for (uint j = 0; j < slots.length(); j++) {
+                    if (slots[j].filename == filename)
+                        _stop_slot(j);
+                }
+                cache_names.erase(i);
+                cache_bufs.erase(i);
+                return;
+            }
+        }
+    }
+
+    // Stop all sounds and flush the buffer cache.
+    void unload_all() {
+        stop_all();
+        cache_names.resize(0);
+        cache_bufs.resize(0);
+    }
+
+    // ----------------------------------------------------------------
+    // Play — stationary (unaffected by listener distance)
+    // ----------------------------------------------------------------
+
+    // Play a pre-loaded buffer. gain < 0 uses default_gain.
+    int play(al_buffer@ buf, bool looping = false, float gain = -1.0, float pitch = 1.0) {
+        if (@buf == null) return -1;
+        int i = _reserve();
+        if (i < 0) return -1;
+        _setup(i, buf, "", looping, gain, pitch, false);
+        srcs[i].play();
+        return i;
+    }
+
+    // Play by filename — loads and caches on first use.
+    int play(const string& in filename, bool looping = false, float gain = -1.0, float pitch = 1.0) {
+        al_buffer@ buf = get_buffer(filename);
+        if (@buf == null) return -1;
+        int i = _reserve();
+        if (i < 0) return -1;
+        _setup(i, buf, filename, looping, gain, pitch, false);
+        srcs[i].play();
+        return i;
+    }
+
+    // ----------------------------------------------------------------
+    // Play — 3D positioned in world space
+    // ----------------------------------------------------------------
+
+    int play_3d(al_buffer@ buf, float x, float y, float z, bool looping = false, float gain = -1.0, float pitch = 1.0) {
+        if (@buf == null) return -1;
+        int i = _reserve();
+        if (i < 0) return -1;
+        _setup(i, buf, "", looping, gain, pitch, true);
+        srcs[i].set_position(x, y, z);
+        srcs[i].play();
+        return i;
+    }
+
+    int play_3d(const string& in filename, float x, float y, float z, bool looping = false, float gain = -1.0, float pitch = 1.0) {
+        al_buffer@ buf = get_buffer(filename);
+        if (@buf == null) return -1;
+        int i = _reserve();
+        if (i < 0) return -1;
+        _setup(i, buf, filename, looping, gain, pitch, true);
+        srcs[i].set_position(x, y, z);
+        srcs[i].play();
+        return i;
+    }
+
+    // ----------------------------------------------------------------
+    // Listener — call each frame when the camera/player moves
+    // ----------------------------------------------------------------
+
+    // Update listener position. OpenAL recalculates all 3D audio automatically.
+    void update_listener(float x, float y, float z) {
+        ctx.set_listener_position(x, y, z);
+    }
+
+    // Set listener orientation: forward vector (fx,fy,fz) and up vector (ux,uy,uz).
+    void set_listener_orientation(float fx, float fy, float fz, float ux, float uy, float uz) {
+        ctx.set_listener_orientation(fx, fy, fz, ux, uy, uz);
+    }
+
+    // ----------------------------------------------------------------
+    // Per-slot control
+    // ----------------------------------------------------------------
+
+    bool pause_sound(int i) {
+        if (!_active(i)) return false;
+        slots[i].paused = true;
+        srcs[i].pause();
+        return true;
+    }
+
+    bool resume_sound(int i) {
+        if (!_bounds(i) || @slots[i].buf == null) return false;
+        slots[i].paused = false;
+        srcs[i].play();
+        return true;
+    }
+
+    bool stop_sound(int i) {
+        if (!_bounds(i)) return false;
+        _stop_slot(i);
+        return true;
+    }
+
+    // Move a playing 3D source to a new world position.
+    bool move_sound(int i, float x, float y, float z) {
+        if (!_active(i)) return false;
+        srcs[i].set_position(x, y, z);
+        return true;
+    }
+
+    bool set_gain(int i, float gain) {
+        if (!_active(i)) return false;
+        srcs[i].gain = gain;
+        return true;
+    }
+
+    bool set_pitch(int i, float pitch) {
+        if (!_active(i)) return false;
+        srcs[i].pitch = pitch;
+        return true;
+    }
+
+    // Direct access to the underlying al_source for advanced use.
+    al_source@ get_source(int i) {
+        if (!_bounds(i)) return null;
+        return srcs[i];
+    }
+
+    // ----------------------------------------------------------------
+    // Bulk control
+    // ----------------------------------------------------------------
+
+    void pause_all() {
+        for (uint i = 0; i < slots.length(); i++) {
+            if (!slots[i].is_free(srcs[i])) pause_sound(int(i));
+        }
+    }
+
+    void resume_all() {
+        for (uint i = 0; i < slots.length(); i++) {
+            if (slots[i].paused) resume_sound(int(i));
+        }
+    }
+
+    void stop_all() {
+        for (uint i = 0; i < slots.length(); i++)
+            _stop_slot(i);
+    }
+
+    // ----------------------------------------------------------------
+    // Ownership tagging
+    // ----------------------------------------------------------------
+
+    // Tag a slot with an owner key. Persistent sounds are never automatically
+    // recycled — you must call stop_sound() or stop_by_owner() explicitly.
+    bool set_owner(int i, const string& in owner, bool persistent = false) {
+        if (!_active(i)) return false;
+        slots[i].owner     = owner;
+        slots[i].persistent = persistent;
+        return true;
+    }
+
+    // Find the first active slot tagged with owner. Returns -1 if not found.
+    int find_by_owner(const string& in owner) {
+        for (uint i = 0; i < slots.length(); i++) {
+            if (slots[i].owner == owner && !slots[i].is_free(srcs[i]))
+                return int(i);
+        }
+        return -1;
+    }
+
+    bool stop_by_owner(const string& in owner) {
+        bool found = false;
+        for (uint i = 0; i < slots.length(); i++) {
+            if (slots[i].owner == owner) { _stop_slot(i); found = true; }
+        }
+        return found;
+    }
+
+    // ----------------------------------------------------------------
+    // Status queries
+    // ----------------------------------------------------------------
+
+    bool is_active(int i)  { return _active(i); }
+    bool is_playing(int i) { return _bounds(i) && @slots[i].buf != null && srcs[i].is_playing; }
+    bool is_paused(int i)  { return _bounds(i) && slots[i].paused; }
+
+    // Number of slots currently in use.
+    int active_count() {
+        int n = 0;
+        for (uint i = 0; i < slots.length(); i++) {
+            if (!slots[i].is_free(srcs[i])) n++;
+        }
+        return n;
+    }
+
+    // Total pool capacity.
+    int capacity() { return int(srcs.length()); }
+
+    // Release any slots whose one-shot sounds have finished naturally.
+    void clean_unused() {
+        for (uint i = 0; i < slots.length(); i++) {
+            if (@slots[i].buf != null && slots[i].is_free(srcs[i]))
+                slots[i].reset();
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // HRTF — requires device to be passed to the constructor
+    // ----------------------------------------------------------------
+
+    bool get_hrtf_available() property { return @dev != null && dev.hrtf_available; }
+    int  get_hrtf_count() property    { return @dev != null ? dev.hrtf_count : 0; }
+    string get_hrtf_name(int id) { return @dev != null ? dev.get_hrtf_name(id) : ""; }
+    int  get_hrtf_status() property   { return @dev != null ? dev.hrtf_status : ALC_HRTF_DISABLED_SOFT; }
+
+    // Enable HRTF using the model at the given index (0 = first available).
+    bool enable_hrtf(int id = 0) {
+        if (@dev == null || !dev.hrtf_available) return false;
+        return dev.enable_hrtf(id);
+    }
+
+    bool disable_hrtf() {
+        if (@dev == null) return false;
+        return dev.disable_hrtf();
+    }
+
+    // ----------------------------------------------------------------
+    // EFX
+    // ----------------------------------------------------------------
+
+    bool get_efx_available() property { return nval_efx_available(); }
+
+    // Attach a global effect slot to all sources (current and future).
+    // send_num is 0-based; filter is optional per-send filter.
+    bool set_effect(int send_num, al_aux_slot@ slot, al_filter@ filter = null) {
+        if (!nval_efx_available() || send_num < 0 || send_num >= 4) return false;
+        @global_effects[send_num]     = slot;
+        @global_send_filters[send_num] = filter;
+        for (uint i = 0; i < srcs.length(); i++) {
+            if (!slots[i].is_free(srcs[i]))
+                srcs[i].set_aux_send(send_num, slot, filter);
+        }
+        return true;
+    }
+
+    // Remove a global effect from all sources.
+    bool clear_effect(int send_num) {
+        if (send_num < 0 || send_num >= 4) return false;
+        @global_effects[send_num]     = null;
+        @global_send_filters[send_num] = null;
+        for (uint i = 0; i < srcs.length(); i++) {
+            if (!slots[i].is_free(srcs[i]))
+                srcs[i].set_aux_send(send_num, null, null);
+        }
+        return true;
+    }
+
+    void clear_all_effects() {
+        for (int s = 0; s < 4; s++) clear_effect(s);
+    }
+
+    // Apply a direct filter to every source (e.g. global low-pass).
+    bool set_pool_filter(al_filter@ filter) {
+        if (!nval_efx_available()) return false;
+        @global_direct_filter = filter;
+        for (uint i = 0; i < srcs.length(); i++) {
+            if (!slots[i].is_free(srcs[i]))
+                srcs[i].set_direct_filter(filter);
+        }
+        return true;
+    }
+
+    bool clear_pool_filter() {
+        @global_direct_filter = null;
+        for (uint i = 0; i < srcs.length(); i++) {
+            if (!slots[i].is_free(srcs[i]))
+                srcs[i].set_direct_filter(null);
+        }
+        return true;
+    }
+
+    // Per-source aux send — overrides or extends the global for one slot.
+    bool set_source_effect(int i, int send_num, al_aux_slot@ slot, al_filter@ filter = null) {
+        if (!_active(i) || !nval_efx_available() || send_num < 0 || send_num >= 4) return false;
+        srcs[i].set_aux_send(send_num, slot, filter);
+        return true;
+    }
+
+    bool clear_source_effect(int i, int send_num) {
+        if (!_bounds(i) || send_num < 0 || send_num >= 4) return false;
+        srcs[i].set_aux_send(send_num, null, null);
+        return true;
+    }
+
+    // Per-source direct filter.
+    bool set_source_filter(int i, al_filter@ filter) {
+        if (!_active(i) || !nval_efx_available()) return false;
+        srcs[i].set_direct_filter(filter);
+        return true;
+    }
+
+    bool clear_source_filter(int i) {
+        if (!_bounds(i)) return false;
+        srcs[i].set_direct_filter(null);
+        return true;
+    }
+
+    // ----------------------------------------------------------------
+    // EFX helpers — create, configure, and apply effects in one call.
+    // Pool-level versions apply globally; source versions apply to one slot.
+    // All return the created object so you can hold a reference or tweak it later.
+    // ----------------------------------------------------------------
+
+    // --- Reverb ---
+    al_aux_slot@ reverb(float decay_time = 1.49, float gain = 0.32, float density = 1.0, float diffusion = 1.0, float gainhf = 0.89, float decay_hf_ratio = 0.83, int send = 0) {
+        if (!nval_efx_available()) return null;
+        al_effect@ eff = al_effect();
+        eff.type = AL_EFFECT_REVERB;
+        eff.set_f(AL_REVERB_DECAY_TIME,    decay_time);
+        eff.set_f(AL_REVERB_GAIN,          gain);
+        eff.set_f(AL_REVERB_DENSITY,       density);
+        eff.set_f(AL_REVERB_DIFFUSION,     diffusion);
+        eff.set_f(AL_REVERB_GAINHF,        gainhf);
+        eff.set_f(AL_REVERB_DECAY_HFRATIO, decay_hf_ratio);
+        al_aux_slot@ slot = al_aux_slot();
+        slot.set_effect(eff);
+        set_effect(send, slot);
+        return slot;
+    }
+
+    al_aux_slot@ source_reverb(int i, float decay_time = 1.49, float gain = 0.32, float density = 1.0, float diffusion = 1.0, float gainhf = 0.89, float decay_hf_ratio = 0.83, int send = 0) {
+        if (!_active(i) || !nval_efx_available()) return null;
+        al_effect@ eff = al_effect();
+        eff.type = AL_EFFECT_REVERB;
+        eff.set_f(AL_REVERB_DECAY_TIME,    decay_time);
+        eff.set_f(AL_REVERB_GAIN,          gain);
+        eff.set_f(AL_REVERB_DENSITY,       density);
+        eff.set_f(AL_REVERB_DIFFUSION,     diffusion);
+        eff.set_f(AL_REVERB_GAINHF,        gainhf);
+        eff.set_f(AL_REVERB_DECAY_HFRATIO, decay_hf_ratio);
+        al_aux_slot@ slot = al_aux_slot();
+        slot.set_effect(eff);
+        set_source_effect(i, send, slot);
+        return slot;
+    }
+
+    // --- Echo ---
+    al_aux_slot@ echo(float delay = 0.1, float lrdelay = 0.1, float feedback = 0.5, float damping = 0.5, float spread = -1.0, int send = 0) {
+        if (!nval_efx_available()) return null;
+        al_effect@ eff = al_effect();
+        eff.type = AL_EFFECT_ECHO;
+        eff.set_f(AL_ECHO_DELAY,    delay);
+        eff.set_f(AL_ECHO_LRDELAY,  lrdelay);
+        eff.set_f(AL_ECHO_FEEDBACK,  feedback);
+        eff.set_f(AL_ECHO_DAMPING,  damping);
+        eff.set_f(AL_ECHO_SPREAD,   spread);
+        al_aux_slot@ slot = al_aux_slot();
+        slot.set_effect(eff);
+        set_effect(send, slot);
+        return slot;
+    }
+
+    al_aux_slot@ source_echo(int i, float delay = 0.1, float lrdelay = 0.1, float feedback = 0.5, float damping = 0.5, float spread = -1.0, int send = 0) {
+        if (!_active(i) || !nval_efx_available()) return null;
+        al_effect@ eff = al_effect();
+        eff.type = AL_EFFECT_ECHO;
+        eff.set_f(AL_ECHO_DELAY,   delay);
+        eff.set_f(AL_ECHO_LRDELAY, lrdelay);
+        eff.set_f(AL_ECHO_FEEDBACK, feedback);
+        eff.set_f(AL_ECHO_DAMPING, damping);
+        eff.set_f(AL_ECHO_SPREAD,  spread);
+        al_aux_slot@ slot = al_aux_slot();
+        slot.set_effect(eff);
+        set_source_effect(i, send, slot);
+        return slot;
+    }
+
+    // --- Chorus ---
+    al_aux_slot@ chorus(float rate = 1.1, float depth = 0.1, float feedback = 0.25, int waveform = 1, int send = 0) {
+        if (!nval_efx_available()) return null;
+        al_effect@ eff = al_effect();
+        eff.type = AL_EFFECT_CHORUS;
+        eff.set_i(AL_CHORUS_WAVEFORM, waveform);
+        eff.set_f(AL_CHORUS_RATE,     rate);
+        eff.set_f(AL_CHORUS_DEPTH,    depth);
+        eff.set_f(AL_CHORUS_FEEDBACK, feedback);
+        al_aux_slot@ slot = al_aux_slot();
+        slot.set_effect(eff);
+        set_effect(send, slot);
+        return slot;
+    }
+
+    al_aux_slot@ source_chorus(int i, float rate = 1.1, float depth = 0.1, float feedback = 0.25, int waveform = 1, int send = 0) {
+        if (!_active(i) || !nval_efx_available()) return null;
+        al_effect@ eff = al_effect();
+        eff.type = AL_EFFECT_CHORUS;
+        eff.set_i(AL_CHORUS_WAVEFORM, waveform);
+        eff.set_f(AL_CHORUS_RATE,     rate);
+        eff.set_f(AL_CHORUS_DEPTH,    depth);
+        eff.set_f(AL_CHORUS_FEEDBACK, feedback);
+        al_aux_slot@ slot = al_aux_slot();
+        slot.set_effect(eff);
+        set_source_effect(i, send, slot);
+        return slot;
+    }
+
+    // --- Flanger ---
+    al_aux_slot@ flanger(float rate = 0.27, float depth = 1.0, float feedback = -0.5, int waveform = 1, int send = 0) {
+        if (!nval_efx_available()) return null;
+        al_effect@ eff = al_effect();
+        eff.type = AL_EFFECT_FLANGER;
+        eff.set_i(AL_FLANGER_WAVEFORM, waveform);
+        eff.set_f(AL_FLANGER_RATE,     rate);
+        eff.set_f(AL_FLANGER_DEPTH,    depth);
+        eff.set_f(AL_FLANGER_FEEDBACK, feedback);
+        al_aux_slot@ slot = al_aux_slot();
+        slot.set_effect(eff);
+        set_effect(send, slot);
+        return slot;
+    }
+
+    al_aux_slot@ source_flanger(int i, float rate = 0.27, float depth = 1.0, float feedback = -0.5, int waveform = 1, int send = 0) {
+        if (!_active(i) || !nval_efx_available()) return null;
+        al_effect@ eff = al_effect();
+        eff.type = AL_EFFECT_FLANGER;
+        eff.set_i(AL_FLANGER_WAVEFORM, waveform);
+        eff.set_f(AL_FLANGER_RATE,     rate);
+        eff.set_f(AL_FLANGER_DEPTH,    depth);
+        eff.set_f(AL_FLANGER_FEEDBACK, feedback);
+        al_aux_slot@ slot = al_aux_slot();
+        slot.set_effect(eff);
+        set_source_effect(i, send, slot);
+        return slot;
+    }
+
+    // --- Compressor ---
+    al_aux_slot@ compressor(bool on = true, int send = 0) {
+        if (!nval_efx_available()) return null;
+        al_effect@ eff = al_effect();
+        eff.type = AL_EFFECT_COMPRESSOR;
+        eff.set_i(1, on ? 1 : 0); // AL_COMPRESSOR_ONOFF = 1
+        al_aux_slot@ slot = al_aux_slot();
+        slot.set_effect(eff);
+        set_effect(send, slot);
+        return slot;
+    }
+
+    al_aux_slot@ source_compressor(int i, bool on = true, int send = 0) {
+        if (!_active(i) || !nval_efx_available()) return null;
+        al_effect@ eff = al_effect();
+        eff.type = AL_EFFECT_COMPRESSOR;
+        eff.set_i(1, on ? 1 : 0); // AL_COMPRESSOR_ONOFF = 1
+        al_aux_slot@ slot = al_aux_slot();
+        slot.set_effect(eff);
+        set_source_effect(i, send, slot);
+        return slot;
+    }
+
+    // --- Lowpass filter ---
+    // gain   = overall volume (0.0-1.0, default 1.0)
+    // gainhf = high-frequency volume (0.0-1.0; lower = more muffled)
+    al_filter@ lowpass(float gain = 1.0, float gainhf = 0.317) {
+        if (!nval_efx_available()) return null;
+        al_filter@ flt = al_filter();
+        flt.type = AL_FILTER_LOWPASS;
+        flt.set_f(AL_LOWPASS_GAIN,   gain);
+        flt.set_f(AL_LOWPASS_GAINHF, gainhf);
+        set_pool_filter(flt);
+        return flt;
+    }
+
+    al_filter@ source_lowpass(int i, float gain = 1.0, float gainhf = 0.317) {
+        if (!_active(i) || !nval_efx_available()) return null;
+        al_filter@ flt = al_filter();
+        flt.type = AL_FILTER_LOWPASS;
+        flt.set_f(AL_LOWPASS_GAIN,   gain);
+        flt.set_f(AL_LOWPASS_GAINHF, gainhf);
+        set_source_filter(i, flt);
+        return flt;
+    }
+
+    // --- Highpass filter ---
+    al_filter@ highpass(float gain = 1.0, float gainlf = 0.317) {
+        if (!nval_efx_available()) return null;
+        al_filter@ flt = al_filter();
+        flt.type = AL_FILTER_HIGHPASS;
+        flt.set_f(AL_HIGHPASS_GAIN,   gain);
+        flt.set_f(AL_HIGHPASS_GAINLF, gainlf);
+        set_pool_filter(flt);
+        return flt;
+    }
+
+    al_filter@ source_highpass(int i, float gain = 1.0, float gainlf = 0.317) {
+        if (!_active(i) || !nval_efx_available()) return null;
+        al_filter@ flt = al_filter();
+        flt.type = AL_FILTER_HIGHPASS;
+        flt.set_f(AL_HIGHPASS_GAIN,   gain);
+        flt.set_f(AL_HIGHPASS_GAINLF, gainlf);
+        set_source_filter(i, flt);
+        return flt;
+    }
+
+    // --- Bandpass filter ---
+    al_filter@ bandpass(float gain = 1.0, float gainlf = 0.317, float gainhf = 0.317) {
+        if (!nval_efx_available()) return null;
+        al_filter@ flt = al_filter();
+        flt.type = AL_FILTER_BANDPASS;
+        flt.set_f(AL_BANDPASS_GAIN,   gain);
+        flt.set_f(AL_BANDPASS_GAINLF, gainlf);
+        flt.set_f(AL_BANDPASS_GAINHF, gainhf);
+        set_pool_filter(flt);
+        return flt;
+    }
+
+    al_filter@ source_bandpass(int i, float gain = 1.0, float gainlf = 0.317, float gainhf = 0.317) {
+        if (!_active(i) || !nval_efx_available()) return null;
+        al_filter@ flt = al_filter();
+        flt.type = AL_FILTER_BANDPASS;
+        flt.set_f(AL_BANDPASS_GAIN,   gain);
+        flt.set_f(AL_BANDPASS_GAINLF, gainlf);
+        flt.set_f(AL_BANDPASS_GAINHF, gainhf);
+        set_source_filter(i, flt);
+        return flt;
+    }
+
+    // ----------------------------------------------------------------
+    // Internals
+    // ----------------------------------------------------------------
+
+    int _reserve() {
+        clean_unused();
+        for (uint i = 0; i < slots.length(); i++) {
+            if (slots[i].is_free(srcs[i])) return int(i);
+        }
+        return -1; // pool exhausted
+    }
+
+    void _setup(int i, al_buffer@ buf, const string& in filename, bool looping, float gain, float pitch, bool positional) {
+        srcs[i].stop();
+        srcs[i].set_buffer(buf);
+        srcs[i].looping            = looping;
+        srcs[i].gain               = gain < 0.0 ? default_gain : gain;
+        srcs[i].pitch              = pitch;
+        srcs[i].reference_distance = reference_distance;
+        srcs[i].rolloff_factor     = rolloff_factor;
+        if (max_distance > 0.0)
+            srcs[i].max_distance = max_distance;
+        // Stationary sounds are relative to the listener so distance
+        // attenuation never touches them regardless of listener movement.
+        srcs[i].source_relative = !positional;
+        srcs[i].set_position(0.0, 0.0, 0.0);
+        // Apply global EFX; clear any per-source EFX left from a previous sound.
+        if (nval_efx_available()) {
+            for (int s = 0; s < 4; s++)
+                srcs[i].set_aux_send(s, global_effects[s], global_send_filters[s]);
+            srcs[i].set_direct_filter(global_direct_filter);
+        }
+        @slots[i].buf       = buf;
+        slots[i].filename   = filename;
+        slots[i].looping    = looping;
+        slots[i].paused     = false;
+        slots[i].persistent = false;
+        slots[i].owner      = "";
+    }
+
+    void _stop_slot(int i) {
+        srcs[i].stop();
+        if (nval_efx_available()) {
+            for (int s = 0; s < 4; s++)
+                srcs[i].set_aux_send(s, null, null);
+            srcs[i].set_direct_filter(null);
+        }
+        slots[i].reset();
+    }
+
+    bool _bounds(int i) { return i >= 0 && i < int(slots.length()); }
+    bool _active(int i) { return _bounds(i) && @slots[i].buf != null && !slots[i].is_free(srcs[i]); }
+}

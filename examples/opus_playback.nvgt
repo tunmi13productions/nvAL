@@ -1,0 +1,42 @@
+// opus_playback.nvgt - play an Ogg Opus (or .ogg) file through OpenAL via nvAL
+// Decodes audio to raw int16 PCM using NVGT's built-in audio_decoder (no extra plugin needed),
+// loads it into an OpenAL buffer, and plays it.
+// Provide a .ogg or .opus file in the examples/ folder.
+// Space = pause/resume, Escape = quit
+
+#pragma plugin nval
+#include "opus_loader.nvgt"
+
+void main() {
+    show_window("nvAL - Opus Playback");
+
+    if (!nval_is_loaded()) { alert("Error", "OpenAL failed to load."); return; }
+
+    al_device@ dev = al_device();
+    dev.open();
+    al_context@ ctx = al_context(dev);
+    ctx.make_current();
+
+    string pcm, err;
+    int fmt, sr;
+    if (!load_opus("test.opus", pcm, fmt, sr, err)) { alert("Error", err); return; }
+
+    al_buffer@ buf = al_buffer(ctx);
+    buf.set_data(pcm, fmt, sr);
+
+    al_source@ src = al_source(ctx);
+    src.set_buffer(buf);
+    src.play();
+
+    screen_reader_output("Playing. Space = pause/resume, Escape = quit.", false);
+
+    while (src.is_playing || src.is_paused) {
+        wait(50);
+        if (key_pressed(KEY_ESCAPE)) break;
+        if (key_pressed(KEY_SPACE)) {
+            if (src.is_playing) { src.pause(); screen_reader_output("Paused.", true); }
+            else                { src.play();  screen_reader_output("Resumed.", true); }
+        }
+    }
+    src.stop();
+}

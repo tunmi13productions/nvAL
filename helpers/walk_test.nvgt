@@ -1,0 +1,96 @@
+// walk_test.nvgt — sound pool walking test
+// Right-hand coordinate system, Z-up:
+//   X = left/right (Left/Right arrows)
+//   Y = forward/backward (Up/Down arrows)
+//   Z = elevation (Page Up/Page Down)
+// C = coordinates, Escape = quit.
+
+#pragma plugin nval
+#include "wav_loader.nvgt"
+#include "opus_loader.nvgt"
+#include "al_sound_pool.nvgt"
+
+void main() {
+    show_window("nvAL - Walk Test");
+
+    if (!nval_is_loaded()) { alert("Error", "OpenAL failed to load."); return; }
+
+    al_device@ dev = al_device();
+    dev.open();
+    al_context@ ctx = al_context(dev);
+    ctx.make_current();
+
+    // Set up the pool with 16 sources; pass dev so HRTF is available.
+    al_sound_pool pool(ctx, dev, 16);
+    pool.reference_distance = 3.0;
+    pool.rolloff_factor     = 1.0;
+
+    // Enable HRTF if available.
+    if (pool.hrtf_available)
+        pool.enable_hrtf(0);
+
+    // Slight global reverb — small room feel on all sources.
+    pool.reverb(1.2, 0.2, 0.8, 0.8, 0.85);
+
+    // Preload step sounds.
+    for (int i = 1; i <= 5; i++)
+        pool.preload("sounds/step" + i + ".wav");
+
+    // Load test.wav as a looping ambient fixed in the world at the origin.
+    int ambient = pool.play_3d("sounds/test.wav", 0.0, 0.0, 0.0, true);
+
+    float px = 0.0, py = 0.0, pz = 0.0;
+    int   step_idx  = 1;
+    timer step_timer;
+    bool  moving    = false;
+
+    // Right-hand, Z-up: listener faces +Y (forward), Z is up.
+    ctx.set_listener_orientation(0.0, 1.0, 0.0,  0.0, 0.0, 1.0);
+    pool.update_listener(px, py, pz);
+
+    screen_reader_output("Walk test. Left/Right = X, Up/Down = Y, Page Up/Down = Z, H = toggle HRTF, C = coords, Escape = quit.", false);
+
+    while (true) {
+        wait(10);
+        if (key_pressed(KEY_ESCAPE)) break;
+
+        bool any_key = key_down(KEY_LEFT) || key_down(KEY_RIGHT) ||
+                       key_down(KEY_UP)   || key_down(KEY_DOWN)  ||
+                       key_down(KEY_PAGEUP) || key_down(KEY_PAGEDOWN);
+
+        if (any_key && step_timer.elapsed >= 250) {
+            if (key_down(KEY_LEFT))     px -= 1.0;
+            if (key_down(KEY_RIGHT))    px += 1.0;
+            if (key_down(KEY_UP))       py += 1.0;
+            if (key_down(KEY_DOWN))     py -= 1.0;
+            if (key_down(KEY_PAGEUP))   pz += 1.0;
+            if (key_down(KEY_PAGEDOWN)) pz -= 1.0;
+
+            pool.update_listener(px, py, pz);
+            pool.play_3d("sounds/step" + step_idx + ".wav", px, py, pz);
+            step_idx = (step_idx % 5) + 1;
+            step_timer.restart();
+            screen_reader_output("X " + round(px, 1) + "  Y " + round(py, 1) + "  Z " + round(pz, 1), true);
+        } else if (!any_key) {
+            // Reset while standing still so the next step fires immediately.
+            step_timer.restart();
+        }
+
+        if (key_pressed(KEY_C))
+            screen_reader_output("X " + round(px, 1) + "  Y " + round(py, 1) + "  Z " + round(pz, 1), true);
+
+        if (key_pressed(KEY_H)) {
+            if (pool.hrtf_status == ALC_HRTF_ENABLED_SOFT) {
+                pool.disable_hrtf();
+                screen_reader_output("HRTF disabled.", true);
+            } else {
+                if (pool.enable_hrtf(0))
+                    screen_reader_output("HRTF enabled: " + pool.get_hrtf_name(0), true);
+                else
+                    screen_reader_output("HRTF not available.", true);
+            }
+        }
+    }
+
+    pool.stop_all();
+}

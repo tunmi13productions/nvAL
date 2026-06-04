@@ -72,6 +72,7 @@ void main() {
 | File | Demonstrates |
 |------|-------------|
 | `basic_playback.nvgt` | Load and play a WAV file |
+| `opus_playback.nvgt` | Decode and play an Ogg Opus file |
 | `3d_positioning.nvgt` | Move a sound source in 3D space |
 | `efx_reverb.nvgt` | Reverb via EFX auxiliary effect slot |
 | `efx_echo.nvgt` | Echo effect with adjustable delay and feedback |
@@ -81,8 +82,23 @@ void main() {
 | `hrtf.nvgt` | HRTF model selection and 3D audio |
 | `device_info.nvgt` | List all devices, extensions, and capabilities |
 
-All examples that play audio expect `test.wav` (PCM, any bit depth, mono recommended for 3D) in the `examples/` folder.
+WAV examples expect `test.wav` (PCM, any bit depth, mono recommended for 3D) in the `examples/` folder. The Opus example expects `test.opus`.
+
+### Audio loaders
+
+Two `#include`-able helpers provide raw PCM for `al_buffer.set_data()`:
+
+| Helper | Formats |
+|--------|---------|
+| `wav_loader.nvgt` / `load_wav()` | RIFF WAV (PCM 8/16/24-bit, WAVEFORMATEXTENSIBLE) |
+| `opus_loader.nvgt` / `load_opus()` | Ogg Opus, Ogg Vorbis, FLAC, WAV, MP3 — anything NVGT's `audio_decoder` handles |
+
+Both return `(string pcm, int fmt, int sample_rate)` and share the same call signature, so they are interchangeable.
 
 ## License
 
-This software is provided as-is. Do whatever you want with it.
+Copyright (c) 2026 tunmi13productions
+
+Permission is granted to use, modify, and distribute this software for any purpose,
+provided that the original author (tunmi13productions) is credited and the software
+is not represented as your own original work.
