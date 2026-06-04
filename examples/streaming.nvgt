@@ -1,0 +1,73 @@
+// streaming.nvgt - stream audio using buffer queuing
+// Instead of loading the whole file into one buffer, the PCM data is split
+// into small chunks and fed to the source continuously. This is how you'd
+// handle large audio files or real-time generated audio.
+// Space = pause/resume, Escape = quit
+
+#pragma plugin nval
+#include "wav_loader.nvgt"
+
+const int CHUNK_BYTES  = 8192;  // bytes per streaming chunk
+const int NUM_BUFFERS  = 4;     // buffers in the ring
+
+void main() {
+    show_window("nvAL - Streaming");
+
+    if (!nval_is_loaded()) { alert("Error", "OpenAL failed to load."); return; }
+
+    al_device@ dev = al_device();
+    dev.open();
+    al_context@ ctx = al_context(dev);
+    ctx.make_current();
+
+    // Load the entire PCM into memory first (in a real app you'd stream from disk)
+    string pcm, err;
+    int fmt, sr;
+    if (!load_wav("test.wav", pcm, fmt, sr, err)) { alert("Error", err); return; }
+
+    al_source@ src = al_source(ctx);
+
+    // Pre-fill the buffer ring
+    array<al_buffer@> buffers(NUM_BUFFERS);
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+        @buffers[i] = al_buffer(ctx);
+    }
+
+    uint cursor = 0;
+
+    // Helper: fill one buffer with the next chunk, wrapping around
+    auto fill_buffer = function(al_buffer@ b) {
+        uint remaining = pcm.length() - cursor;
+        uint take      = (remaining < CHUNK_BYTES) ? remaining : CHUNK_BYTES;
+        string chunk   = pcm.substr(cursor, take);
+        cursor += take;
+        if (cursor >= pcm.length()) cursor = 0; // loop
+        b.set_data(chunk, fmt, sr);
+        src.queue_buffer(b);
+    };
+
+    for (int i = 0; i < NUM_BUFFERS; i++) fill_buffer(buffers[i]);
+    src.play();
+
+    screen_reader_output("Streaming. Space = pause/resume, Escape = quit.", false);
+
+    while (true) {
+        wait(10);
+        if (key_pressed(KEY_ESCAPE)) break;
+        if (key_pressed(KEY_SPACE)) {
+            if (src.is_playing) { src.pause(); screen_reader_output("Paused.", true); }
+            else                { src.play();  screen_reader_output("Resumed.", true); }
+        }
+
+        // Recycle any processed buffers
+        int processed = src.buffers_processed;
+        for (int i = 0; i < processed; i++) {
+            al_buffer@ used = src.unqueue_buffer();
+            if (used !is null) fill_buffer(used);
+        }
+
+        // Restart if the source stalled (e.g. we ran out of queued buffers)
+        if (src.is_stopped && src.buffers_queued > 0) src.play();
+    }
+    src.stop();
+}

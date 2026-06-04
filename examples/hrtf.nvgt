@@ -1,0 +1,69 @@
+// hrtf.nvgt - enable HRTF for realistic 3D audio over headphones
+// Lists available HRTF models, lets you pick one, then moves a sound around.
+// Requires a MONO WAV file and headphones for best effect.
+// Left/Right = pan, Up/Down = front/back, Escape = quit
+
+#pragma plugin nval
+#include "wav_loader.nvgt"
+
+void main() {
+    show_window("nvAL - HRTF");
+
+    if (!nval_is_loaded()) { alert("Error", "OpenAL failed to load."); return; }
+
+    al_device@ dev = al_device();
+    dev.open();
+
+    if (!dev.hrtf_available) {
+        alert("Notice", "ALC_SOFT_HRTF not supported by this OpenAL build. Continuing without HRTF.");
+    } else {
+        int count = dev.hrtf_count;
+        string models = "Available HRTF models (" + count + "):\n";
+        for (int i = 0; i < count; i++) models += i + ": " + dev.get_hrtf_name(i) + "\n";
+        alert("HRTF Models", models);
+        // Enable the first available HRTF model
+        if (count > 0) {
+            if (dev.enable_hrtf(0)) screen_reader_output("HRTF enabled: " + dev.get_hrtf_name(0), false);
+            else                    screen_reader_output("HRTF enable failed, status: " + dev.hrtf_status, false);
+        }
+    }
+
+    al_context@ ctx = al_context(dev);
+    ctx.make_current();
+    ctx.set_listener_position(0, 0, 0);
+    ctx.set_listener_orientation(0, 0, -1,  0, 1, 0);
+
+    string pcm, err;
+    int fmt, sr;
+    if (!load_wav("test.wav", pcm, fmt, sr, err)) { alert("Error", err); return; }
+
+    al_buffer@ buf = al_buffer(ctx);
+    buf.set_data(pcm, fmt, sr);
+
+    al_source@ src = al_source(ctx);
+    src.set_buffer(buf);
+    src.looping = true;
+    src.reference_distance = 1.0;
+    src.max_distance       = 20.0;
+    src.set_position(0.0, 0.0, -3.0);
+    src.play();
+
+    float x = 0.0, z = -3.0;
+    screen_reader_output("HRTF demo. Use headphones! Left/Right/Up/Down to move source. Escape = quit.", false);
+
+    while (true) {
+        wait(5);
+        if (key_pressed(KEY_ESCAPE)) break;
+        bool moved = false;
+        if (key_down(KEY_LEFT))  { x -= 0.1; moved = true; }
+        if (key_down(KEY_RIGHT)) { x += 0.1; moved = true; }
+        if (key_down(KEY_UP))    { z -= 0.1; moved = true; }
+        if (key_down(KEY_DOWN))  { z += 0.1; moved = true; }
+        if (moved) {
+            src.set_position(x, 0.0, z);
+            screen_reader_output("x " + round(x, 1) + " z " + round(z, 1), true);
+        }
+    }
+    src.stop();
+    dev.disable_hrtf();
+}

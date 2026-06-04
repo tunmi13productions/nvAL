@@ -1,0 +1,11 @@
+*.dll
+*.so
+*.dylib
+*.lib
+*.exp
+*.obj
+*.o
+*.pdb
+nval.dll
+nval.so
+nval.dylib

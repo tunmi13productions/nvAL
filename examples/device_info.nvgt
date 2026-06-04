@@ -1,0 +1,39 @@
+// device_info.nvgt - print info about available OpenAL devices and extensions
+
+#pragma plugin nval
+
+void main() {
+    if (!nval_is_loaded()) { alert("Error", "OpenAL failed to load."); return; }
+
+    string info = "OpenAL " + nval_get_version() + "\n";
+    info += "Vendor:   " + nval_get_vendor() + "\n";
+    info += "Renderer: " + nval_get_renderer() + "\n\n";
+
+    info += "Output devices:\n";
+    string[] devs = nval_get_devices().split("\n");
+    for (uint i = 0; i < devs.length(); i++) info += "  " + devs[i] + "\n";
+    info += "Default: " + nval_get_default_device() + "\n\n";
+
+    if (nval_capture_available()) {
+        info += "Capture devices:\n";
+        string[] caps = nval_get_capture_devices().split("\n");
+        for (uint i = 0; i < caps.length(); i++) info += "  " + caps[i] + "\n";
+        info += "Default: " + nval_get_default_capture_device() + "\n\n";
+    } else {
+        info += "Capture: not available\n\n";
+    }
+
+    // Open device to check EFX and HRTF
+    al_device@ dev = al_device();
+    dev.open();
+
+    info += "EFX: " + (dev.efx_available ? "yes (max " + dev.max_auxiliary_sends + " sends)" : "no") + "\n";
+    if (dev.hrtf_available) {
+        info += "HRTF: " + dev.hrtf_count + " model(s)\n";
+        for (int i = 0; i < dev.hrtf_count; i++) info += "  " + i + ": " + dev.get_hrtf_name(i) + "\n";
+    } else {
+        info += "HRTF: not available\n";
+    }
+
+    alert("Device Info", info);
+}

@@ -1,0 +1,62 @@
+// 3d_positioning.nvgt - move a sound source around the listener in 3D space
+// Requires a MONO WAV file (stereo sources are not spatialized by OpenAL).
+// Left/Right = pan X, Up/Down = move Z (front/back), PgUp/PgDn = move Y (height)
+// Space = pause/resume, Escape = quit
+
+#pragma plugin nval
+#include "wav_loader.nvgt"
+
+void main() {
+    show_window("nvAL - 3D Positioning");
+
+    if (!nval_is_loaded()) { alert("Error", "OpenAL failed to load."); return; }
+
+    al_device@ dev = al_device();
+    dev.open();
+    al_context@ ctx = al_context(dev);
+    ctx.make_current();
+
+    ctx.set_distance_model(AL_INVERSE_DISTANCE_CLAMPED);
+    ctx.set_listener_position(0, 0, 0);
+    ctx.set_listener_orientation(0, 0, -1,  0, 1, 0); // facing -Z, up = +Y
+
+    string pcm, err;
+    int fmt, sr;
+    if (!load_wav("test.wav", pcm, fmt, sr, err)) { alert("Error", err); return; }
+
+    al_buffer@ buf = al_buffer(ctx);
+    buf.set_data(pcm, fmt, sr);
+
+    al_source@ src = al_source(ctx);
+    src.set_buffer(buf);
+    src.looping           = true;
+    src.reference_distance = 1.0;
+    src.max_distance       = 30.0;
+    src.rolloff_factor     = 1.0;
+    src.set_position(-3.0, 0.0, 0.0);
+    src.play();
+
+    float x = -3.0, y = 0.0, z = 0.0;
+    screen_reader_output("3D audio. Left/Right/Up/Down/PgUp/PgDn to move source. Space = pause. Escape = quit.", false);
+
+    while (true) {
+        wait(5);
+        if (key_pressed(KEY_ESCAPE)) break;
+        if (key_pressed(KEY_SPACE)) {
+            if (src.is_playing) { src.pause(); screen_reader_output("Paused.", true); }
+            else                { src.play();  screen_reader_output("Resumed.", true); }
+        }
+        bool moved = false;
+        if (key_down(KEY_LEFT))     { x -= 0.1; moved = true; }
+        if (key_down(KEY_RIGHT))    { x += 0.1; moved = true; }
+        if (key_down(KEY_UP))       { z -= 0.1; moved = true; }
+        if (key_down(KEY_DOWN))     { z += 0.1; moved = true; }
+        if (key_down(KEY_PAGEUP))   { y += 0.1; moved = true; }
+        if (key_down(KEY_PAGEDOWN)) { y -= 0.1; moved = true; }
+        if (moved) {
+            src.set_position(x, y, z);
+            screen_reader_output("x " + round(x, 1) + " y " + round(y, 1) + " z " + round(z, 1), true);
+        }
+    }
+    src.stop();
+}

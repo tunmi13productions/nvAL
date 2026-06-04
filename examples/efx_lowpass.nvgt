@@ -1,0 +1,58 @@
+// efx_lowpass.nvgt - apply a lowpass filter directly to a source
+// Simulates muffling (e.g. sound through a wall or underwater)
+// Up/Down = adjust filter gain, L = toggle filter, Escape = quit
+
+#pragma plugin nval
+#include "wav_loader.nvgt"
+
+void main() {
+    show_window("nvAL - EFX Lowpass Filter");
+
+    if (!nval_is_loaded()) { alert("Error", "OpenAL failed to load."); return; }
+
+    al_device@ dev = al_device();
+    dev.open();
+    if (!dev.efx_available) { alert("Error", "EFX not supported."); return; }
+
+    al_context@ ctx = al_context(dev);
+    ctx.make_current();
+
+    string pcm, err;
+    int fmt, sr;
+    if (!load_wav("test.wav", pcm, fmt, sr, err)) { alert("Error", err); return; }
+
+    al_buffer@ buf = al_buffer(ctx);
+    buf.set_data(pcm, fmt, sr);
+
+    al_filter@ lp = al_filter();
+    lp.type = AL_FILTER_LOWPASS;
+    float gain   = 1.0;
+    float gainhf = 0.1; // attenuate high frequencies heavily
+    lp.set_f(AL_LOWPASS_GAIN,   gain);
+    lp.set_f(AL_LOWPASS_GAINHF, gainhf);
+
+    al_source@ src = al_source(ctx);
+    src.set_buffer(buf);
+    src.looping = true;
+    src.play();
+
+    bool filter_on = false;
+    screen_reader_output("Playing. L = toggle lowpass, Up/Down = gainhf, Escape = quit.", false);
+
+    while (true) {
+        wait(5);
+        if (key_pressed(KEY_ESCAPE)) break;
+        if (key_pressed(KEY_SPACE)) {
+            if (src.is_playing) { src.pause(); screen_reader_output("Paused.", true); }
+            else                { src.play();  screen_reader_output("Resumed.", true); }
+        }
+        if (key_pressed(KEY_L)) {
+            filter_on = !filter_on;
+            src.set_direct_filter(filter_on ? lp : null);
+            screen_reader_output(filter_on ? "Lowpass on (muffled)." : "Lowpass off (clear).", true);
+        }
+        if (key_pressed(KEY_UP))   { gainhf = min(1.0, gainhf + 0.05); lp.set_f(AL_LOWPASS_GAINHF, gainhf); if (filter_on) src.set_direct_filter(lp); screen_reader_output("gainhf " + round(gainhf, 2), true); }
+        if (key_pressed(KEY_DOWN)) { gainhf = max(0.0, gainhf - 0.05); lp.set_f(AL_LOWPASS_GAINHF, gainhf); if (filter_on) src.set_direct_filter(lp); screen_reader_output("gainhf " + round(gainhf, 2), true); }
+    }
+    src.stop();
+}

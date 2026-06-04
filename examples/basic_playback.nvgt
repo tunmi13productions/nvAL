@@ -1,0 +1,42 @@
+// basic_playback.nvgt - load and play a WAV file
+// Place test.wav (mono PCM recommended) in the same folder.
+// Space = pause/resume, Escape = quit
+
+#pragma plugin nval
+#include "wav_loader.nvgt"
+
+void main() {
+    show_window("nvAL - Basic Playback");
+
+    if (!nval_is_loaded()) { alert("Error", "OpenAL failed to load."); return; }
+
+    al_device@ dev = al_device();
+    if (!dev.open()) { alert("Error", "Could not open audio device."); return; }
+
+    al_context@ ctx = al_context(dev);
+    if (!ctx.make_current()) { alert("Error", "Could not create context."); return; }
+
+    string pcm, err;
+    int fmt, sr;
+    if (!load_wav("test.wav", pcm, fmt, sr, err)) { alert("Error", "load_wav: " + err); return; }
+
+    al_buffer@ buf = al_buffer(ctx);
+    buf.set_data(pcm, fmt, sr);
+
+    al_source@ src = al_source(ctx);
+    src.set_buffer(buf);
+    src.looping = true;
+    src.play();
+
+    screen_reader_output("Playing. Space = pause/resume, Escape = quit.", false);
+
+    while (true) {
+        wait(5);
+        if (key_pressed(KEY_ESCAPE)) break;
+        if (key_pressed(KEY_SPACE)) {
+            if (src.is_playing) { src.pause(); screen_reader_output("Paused.", true); }
+            else                { src.play();  screen_reader_output("Resumed.", true); }
+        }
+    }
+    src.stop();
+}

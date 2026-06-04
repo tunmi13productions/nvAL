@@ -1,0 +1,67 @@
+// capture.nvgt - record from the microphone and play it back
+// Press R to start recording, R again to stop and play back.
+// Escape = quit
+
+#pragma plugin nval
+
+const int SAMPLE_RATE  = 44100;
+const int RECORD_SECS  = 5;
+const int CAPTURE_BUFSZ = SAMPLE_RATE * RECORD_SECS; // max samples to buffer
+
+void main() {
+    show_window("nvAL - Capture");
+
+    if (!nval_is_loaded()) { alert("Error", "OpenAL failed to load."); return; }
+    if (!nval_capture_available()) { alert("Error", "Capture not supported."); return; }
+
+    // Playback device/context
+    al_device@ dev = al_device();
+    dev.open();
+    al_context@ ctx = al_context(dev);
+    ctx.make_current();
+
+    screen_reader_output("Press R to start recording (up to " + RECORD_SECS + " seconds). Escape = quit.", false);
+
+    while (true) {
+        wait(5);
+        if (key_pressed(KEY_ESCAPE)) break;
+
+        if (key_pressed(KEY_R)) {
+            // Open capture device
+            string cap_name = nval_get_default_capture_device();
+            al_capture_device@ cap = al_capture_device(cap_name, SAMPLE_RATE, AL_FORMAT_MONO16, CAPTURE_BUFSZ);
+            if (!cap.is_open) { alert("Error", "Could not open capture device."); continue; }
+
+            screen_reader_output("Recording... press R to stop.", false);
+            cap.start();
+
+            // Wait until user presses R again or max time elapses
+            uint start_ticks = ticks(false);
+            while (true) {
+                wait(5);
+                if (key_pressed(KEY_R)) break;
+                if (ticks(false) - start_ticks >= uint(RECORD_SECS * 1000)) {
+                    screen_reader_output("Max recording time reached.", true);
+                    break;
+                }
+            }
+
+            cap.stop();
+            int samples = cap.available;
+            screen_reader_output("Recorded " + samples + " samples. Playing back...", false);
+
+            string recorded = cap.read_samples(samples);
+            cap.close();
+
+            if (samples > 0) {
+                al_buffer@ buf = al_buffer(ctx);
+                buf.set_data(recorded, AL_FORMAT_MONO16, SAMPLE_RATE);
+                al_source@ src = al_source(ctx);
+                src.set_buffer(buf);
+                src.play();
+                while (src.is_playing) wait(10);
+                screen_reader_output("Playback done. Press R to record again, Escape to quit.", false);
+            }
+        }
+    }
+}

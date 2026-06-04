@@ -1,0 +1,74 @@
+// efx_echo.nvgt - apply an echo effect using the EFX extension
+// Up/Down arrows adjust echo delay, Left/Right adjust feedback
+// E = toggle echo, Space = pause/resume, Escape = quit
+
+#pragma plugin nval
+#include "wav_loader.nvgt"
+
+void main() {
+    show_window("nvAL - EFX Echo");
+
+    if (!nval_is_loaded()) { alert("Error", "OpenAL failed to load."); return; }
+
+    al_device@ dev = al_device();
+    dev.open();
+    if (!dev.efx_available) { alert("Error", "EFX not supported."); return; }
+
+    al_context@ ctx = al_context(dev);
+    ctx.make_current();
+
+    string pcm, err;
+    int fmt, sr;
+    if (!load_wav("test.wav", pcm, fmt, sr, err)) { alert("Error", err); return; }
+
+    al_buffer@ buf = al_buffer(ctx);
+    buf.set_data(pcm, fmt, sr);
+
+    al_effect@ echo = al_effect();
+    echo.type = AL_EFFECT_ECHO;
+
+    float delay    = 0.207;  // seconds (max ~0.207)
+    float feedback = 0.5;    // 0.0 - 1.0
+    echo.set_f(AL_ECHO_DELAY,    delay);
+    echo.set_f(AL_ECHO_LRDELAY,  0.1);
+    echo.set_f(AL_ECHO_DAMPING,  0.5);
+    echo.set_f(AL_ECHO_FEEDBACK, feedback);
+    echo.set_f(AL_ECHO_SPREAD,   -1.0);
+
+    al_aux_slot@ slot = al_aux_slot();
+    slot.set_effect(echo);
+
+    al_source@ src = al_source(ctx);
+    src.set_buffer(buf);
+    src.looping = true;
+    src.play();
+
+    bool echo_on = false;
+    screen_reader_output("Playing dry. E = toggle echo, Up/Down = delay, Left/Right = feedback, Escape = quit.", false);
+
+    while (true) {
+        wait(5);
+        if (key_pressed(KEY_ESCAPE)) break;
+        if (key_pressed(KEY_SPACE)) {
+            if (src.is_playing) { src.pause(); screen_reader_output("Paused.", true); }
+            else                { src.play();  screen_reader_output("Resumed.", true); }
+        }
+        if (key_pressed(KEY_E)) {
+            echo_on = !echo_on;
+            src.set_aux_send(0, echo_on ? slot : null, null);
+            screen_reader_output(echo_on ? "Echo on." : "Echo off.", true);
+        }
+        bool changed = false;
+        if (key_pressed(KEY_UP))    { delay    = min(0.207, delay    + 0.01); changed = true; }
+        if (key_pressed(KEY_DOWN))  { delay    = max(0.0,   delay    - 0.01); changed = true; }
+        if (key_pressed(KEY_RIGHT)) { feedback = min(1.0,   feedback + 0.05); changed = true; }
+        if (key_pressed(KEY_LEFT))  { feedback = max(0.0,   feedback - 0.05); changed = true; }
+        if (changed) {
+            echo.set_f(AL_ECHO_DELAY,    delay);
+            echo.set_f(AL_ECHO_FEEDBACK, feedback);
+            slot.set_effect(echo); // reapply to update slot
+            screen_reader_output("Delay " + round(delay, 3) + " feedback " + round(feedback, 2), true);
+        }
+    }
+    src.stop();
+}

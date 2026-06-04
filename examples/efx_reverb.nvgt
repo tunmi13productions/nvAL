@@ -1,0 +1,79 @@
+// efx_reverb.nvgt - apply reverb to a source using the EFX extension
+// R = toggle reverb on/off, Space = pause/resume, Escape = quit
+
+#pragma plugin nval
+#include "wav_loader.nvgt"
+
+void main() {
+    show_window("nvAL - EFX Reverb");
+
+    if (!nval_is_loaded()) { alert("Error", "OpenAL failed to load."); return; }
+
+    al_device@ dev = al_device();
+    dev.open();
+
+    if (!dev.efx_available) {
+        alert("Error", "EFX extension not supported by this OpenAL device.");
+        return;
+    }
+
+    al_context@ ctx = al_context(dev);
+    ctx.make_current();
+
+    string pcm, err;
+    int fmt, sr;
+    if (!load_wav("test.wav", pcm, fmt, sr, err)) { alert("Error", err); return; }
+
+    al_buffer@ buf = al_buffer(ctx);
+    buf.set_data(pcm, fmt, sr);
+
+    // Create a reverb effect (large hall preset values)
+    al_effect@ reverb = al_effect();
+    reverb.type = AL_EFFECT_REVERB;
+    reverb.set_f(AL_REVERB_DENSITY,            1.0);
+    reverb.set_f(AL_REVERB_DIFFUSION,          1.0);
+    reverb.set_f(AL_REVERB_GAIN,               0.32);
+    reverb.set_f(AL_REVERB_GAINHF,             0.89);
+    reverb.set_f(AL_REVERB_DECAY_TIME,         7.5);
+    reverb.set_f(AL_REVERB_DECAY_HFRATIO,      0.5);
+    reverb.set_f(AL_REVERB_REFLECTIONS_GAIN,   0.12);
+    reverb.set_f(AL_REVERB_REFLECTIONS_DELAY,  0.02);
+    reverb.set_f(AL_REVERB_LATE_REVERB_GAIN,   1.26);
+    reverb.set_f(AL_REVERB_LATE_REVERB_DELAY,  0.03);
+    reverb.set_f(AL_REVERB_AIR_ABSORPTION_GAINHF, 0.994);
+    reverb.set_f(AL_REVERB_ROOM_ROLLOFF_FACTOR, 0.0);
+    reverb.set_i(AL_REVERB_DECAY_HFLIMIT,      1);
+
+    // Attach effect to an auxiliary effect slot
+    al_aux_slot@ slot = al_aux_slot();
+    slot.set_effect(reverb);
+    slot.gain = 1.0;
+
+    al_source@ src = al_source(ctx);
+    src.set_buffer(buf);
+    src.looping = true;
+    src.play();
+
+    bool reverb_on = false;
+    screen_reader_output("Playing dry. Press R to toggle reverb, Space = pause, Escape = quit.", false);
+
+    while (true) {
+        wait(5);
+        if (key_pressed(KEY_ESCAPE)) break;
+        if (key_pressed(KEY_SPACE)) {
+            if (src.is_playing) { src.pause(); screen_reader_output("Paused.", true); }
+            else                { src.play();  screen_reader_output("Resumed.", true); }
+        }
+        if (key_pressed(KEY_R)) {
+            reverb_on = !reverb_on;
+            if (reverb_on) {
+                src.set_aux_send(0, slot, null);
+                screen_reader_output("Reverb on.", true);
+            } else {
+                src.set_aux_send(0, null, null);
+                screen_reader_output("Reverb off.", true);
+            }
+        }
+    }
+    src.stop();
+}
