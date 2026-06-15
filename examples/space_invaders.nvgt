@@ -1,0 +1,154 @@
+// space_invaders.nvgt — audio Space Invaders demo for nvAL.
+//
+// Five columns lie along the X axis. Spaceships (spaceship.ogg, a positioned
+// loop) approach from ahead (+Y) toward you and get louder as they near. Off-
+// column ships pan to the side; a ship in your column sounds dead ahead.
+//
+//   Left / Right : change column (line yourself up with a ship)
+//   Space        : fire your laser (laser.ogg)
+//   H            : toggle HRTF (sharper localization, if available)
+//   Escape       : quit
+//
+// Fire while sharing a ship's column to destroy it (spaceship_fail.ogg). A ship
+// that reaches your row invades (spaceship_invade.ogg). Ships come faster as your
+// score climbs. Let 10 ships invade and the game is over.
+//
+// Expects spaceship.ogg, laser.ogg, spaceship_fail.ogg and spaceship_invade.ogg
+// in examples/sounds/.
+
+#pragma plugin nval
+#include "../helpers/al_sound_pool.nvgt"
+
+const int   NUM_COLUMNS = 5;
+const float COL_SPACING = 3.0;   // world units between columns
+const float SPAWN_Y     = 15.0;  // distance ahead where ships appear
+const int   MAX_INVASIONS = 10;  // game over once this many ships get through
+const int   MAX_SHIPS     = 6;
+
+// World X coordinate of a column index (0..NUM_COLUMNS-1), centred on 0.
+float col_x(int col) { return (col - NUM_COLUMNS / 2) * COL_SPACING; }
+
+class ship {
+    int   col;
+    float y;
+    int   slot;   // pool slot of this ship's looping spaceship.ogg source
+}
+
+void main() {
+    show_window("nvAL - Space Invaders");
+    if (!nval_is_loaded()) { alert("Error", "OpenAL failed to load."); return; }
+
+    al_device@ dev = al_device();
+    dev.open();
+    al_context@ ctx = al_context(dev);
+    ctx.make_current();
+    // Face +Y (forward), Z up: ships directly ahead are centred, others pan.
+    ctx.set_listener_orientation(0.0, 1.0, 0.0,  0.0, 0.0, 1.0);
+
+    al_sound_pool pool(ctx, dev, 32);
+    // Tuned so a ship is audible at spawn and swells smoothly as it closes in.
+    pool.reference_distance = 6.0;
+    pool.rolloff_factor     = 0.7;
+
+    bool hrtf_on = false;
+    if (dev.hrtf_available && dev.hrtf_count > 0) hrtf_on = dev.enable_hrtf(0);
+
+    int player_col = NUM_COLUMNS / 2;   // start in the centre column
+    pool.update_listener(col_x(player_col), 0.0, 0.0);
+
+    ship[] ships;
+    int  score     = 0;
+    int  invaded   = 0;
+    bool game_over = false;
+
+    timer frame_timer;
+    timer spawn_timer;
+
+    screen_reader_output("Space Invaders. Left and Right to change column, Space to fire, H for HRTF, Escape to quit. Game over if " + MAX_INVASIONS + " ships invade.", false);
+
+    while (true) {
+        wait(5);
+        float dt = float(frame_timer.elapsed) / 1000.0;
+        frame_timer.restart();
+
+        if (key_pressed(KEY_ESCAPE)) break;
+
+        // --- Move between columns ---
+        if (key_pressed(KEY_LEFT) && player_col > 0) {
+            player_col--;
+            pool.update_listener(col_x(player_col), 0.0, 0.0);
+        }
+        if (key_pressed(KEY_RIGHT) && player_col < NUM_COLUMNS - 1) {
+            player_col++;
+            pool.update_listener(col_x(player_col), 0.0, 0.0);
+        }
+
+        // --- Toggle HRTF ---
+        if (key_pressed(KEY_H)) {
+            if (hrtf_on) { dev.disable_hrtf(); hrtf_on = false; screen_reader_output("HRTF off.", true); }
+            else if (dev.hrtf_available) { hrtf_on = dev.enable_hrtf(0); screen_reader_output(hrtf_on ? "HRTF on." : "HRTF failed.", true); }
+            else screen_reader_output("HRTF not available.", true);
+        }
+
+        // --- Fire ---
+        if (key_pressed(KEY_SPACE)) {
+            pool.play("sounds/laser.ogg");
+            // Hit the nearest ship in our column, if any.
+            int   target = -1;
+            float best_y = SPAWN_Y + 1.0;
+            for (uint i = 0; i < ships.length(); i++) {
+                if (ships[i].col == player_col && ships[i].y < best_y) {
+                    best_y = ships[i].y;
+                    target = int(i);
+                }
+            }
+            if (target >= 0) {
+                pool.stop_sound(ships[target].slot);
+                pool.play_oneshot_3d("sounds/spaceship_fail.ogg", col_x(ships[target].col), ships[target].y, 0.0);
+                ships.erase(target);
+                score++;
+                screen_reader_output("Hit! Score " + score, true);
+            }
+        }
+
+        // --- Difficulty scales with score ---
+        float speed          = 1.2 + 0.2 * score;
+        int   spawn_interval = 2800 - 120 * score;
+        if (spawn_interval < 900) spawn_interval = 900;
+
+        // --- Spawn (also keeps at least one ship in play) ---
+        if ((spawn_timer.elapsed >= spawn_interval || ships.length() == 0) && int(ships.length()) < MAX_SHIPS) {
+            ship s;
+            s.col  = random(0, NUM_COLUMNS - 1);
+            s.y    = SPAWN_Y;
+            // Vary each ship's pitch 0.75-1.25 so a cluster doesn't sound identical.
+            float pitch = 0.75 + float(random(0, 50)) / 100.0;
+            s.slot = pool.play_3d("sounds/spaceship.ogg", col_x(s.col), s.y, 0.0, true, -1.0, pitch);
+            if (s.slot >= 0) ships.insert_last(s);
+            spawn_timer.restart();
+        }
+
+        // --- Advance ships toward the player ---
+        for (uint i = 0; i < ships.length(); ) {
+            ships[i].y -= speed * dt;
+            if (ships[i].y <= 0.0) {
+                pool.stop_sound(ships[i].slot);
+                pool.play_oneshot_3d("sounds/spaceship_invade.ogg", col_x(ships[i].col), 0.5, 0.0);
+                ships.erase(i);
+                invaded++;
+                screen_reader_output("Invaded! " + invaded + " of " + MAX_INVASIONS, true);
+            } else {
+                pool.move_sound(ships[i].slot, col_x(ships[i].col), ships[i].y, 0.0);
+                i++;
+            }
+        }
+
+        if (invaded >= MAX_INVASIONS) { game_over = true; break; }
+    }
+
+    pool.stop_all();
+    if (game_over) {
+        screen_reader_output("Game over. Final score " + score + ". Press Escape to exit.", true);
+        while (!key_pressed(KEY_ESCAPE)) wait(20);
+    }
+}

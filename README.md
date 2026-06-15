@@ -79,6 +79,7 @@ void main() {
 | `efx_echo.nvgt` | Echo effect with adjustable delay and feedback |
 | `efx_lowpass.nvgt` | Lowpass direct filter (muffling effect) |
 | `streaming.nvgt` | Buffer-queue streaming for large files |
+| `space_invaders.nvgt` | Audio game using `al_sound_pool` — 3D positioned loops, one-shots, HRTF |
 | `capture.nvgt` | Microphone capture and playback |
 | `hrtf.nvgt` | HRTF model selection and 3D audio |
 | `device_info.nvgt` | List all devices, extensions, and capabilities |
