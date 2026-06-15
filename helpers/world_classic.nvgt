@@ -49,6 +49,7 @@ void main() {
 
     while (true) {
         wait(10);
+        pool.update();
         if (key_pressed(KEY_ESCAPE)) break;
 
         bool any_key = key_down(KEY_LEFT) || key_down(KEY_RIGHT) ||
