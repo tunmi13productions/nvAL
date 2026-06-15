@@ -1,10 +1,10 @@
 // 3d_positioning.nvgt - move a sound source around the listener in 3D space
-// Requires a MONO WAV file (stereo sources are not spatialized by OpenAL).
+// Requires a MONO audio file (stereo sources are not spatialized by OpenAL).
 // Left/Right = pan X, Up/Down = move Z (front/back), PgUp/PgDn = move Y (height)
 // Space = pause/resume, Escape = quit
 
 #pragma plugin nval
-#include "wav_loader.nvgt"
+#include "../helpers/al_load.nvgt"
 
 void main() {
     show_window("nvAL - 3D Positioning");
@@ -20,9 +20,9 @@ void main() {
     ctx.set_listener_position(0, 0, 0);
     ctx.set_listener_orientation(0, 0, -1,  0, 1, 0); // facing -Z, up = +Y
 
-    string pcm, err;
+    string pcm;
     int fmt, sr;
-    if (!load_wav("test.wav", pcm, fmt, sr, err)) { alert("Error", err); return; }
+    if (!al_load("test.wav", pcm, fmt, sr)) { alert("Error", "Could not load test.wav."); return; }
 
     al_buffer@ buf = al_buffer(ctx);
     buf.set_data(pcm, fmt, sr);

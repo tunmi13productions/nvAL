@@ -1,9 +1,9 @@
-// basic_playback.nvgt - load and play a WAV file
-// Place test.wav (mono PCM recommended) in the same folder.
+// basic_playback.nvgt - load and play an audio file
+// Place test.wav (or any supported format) in the same folder.
 // Space = pause/resume, Escape = quit
 
 #pragma plugin nval
-#include "wav_loader.nvgt"
+#include "../helpers/al_load.nvgt"
 
 void main() {
     show_window("nvAL - Basic Playback");
@@ -16,9 +16,9 @@ void main() {
     al_context@ ctx = al_context(dev);
     if (!ctx.make_current()) { alert("Error", "Could not create context."); return; }
 
-    string pcm, err;
+    string pcm;
     int fmt, sr;
-    if (!load_wav("test.wav", pcm, fmt, sr, err)) { alert("Error", "load_wav: " + err); return; }
+    if (!al_load("test.wav", pcm, fmt, sr)) { alert("Error", "Could not load test.wav."); return; }
 
     al_buffer@ buf = al_buffer(ctx);
     buf.set_data(pcm, fmt, sr);

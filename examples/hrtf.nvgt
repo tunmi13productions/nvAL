@@ -1,10 +1,10 @@
 // hrtf.nvgt - enable HRTF for realistic 3D audio over headphones
 // Lists available HRTF models, lets you pick one, then moves a sound around.
-// Requires a MONO WAV file and headphones for best effect.
+// Requires a MONO audio file and headphones for best effect.
 // Left/Right = pan, Up/Down = front/back, Escape = quit
 
 #pragma plugin nval
-#include "wav_loader.nvgt"
+#include "../helpers/al_load.nvgt"
 
 void main() {
     show_window("nvAL - HRTF");
@@ -33,9 +33,9 @@ void main() {
     ctx.set_listener_position(0, 0, 0);
     ctx.set_listener_orientation(0, 0, -1,  0, 1, 0);
 
-    string pcm, err;
+    string pcm;
     int fmt, sr;
-    if (!load_wav("test.wav", pcm, fmt, sr, err)) { alert("Error", err); return; }
+    if (!al_load("test.wav", pcm, fmt, sr)) { alert("Error", "Could not load test.wav."); return; }
 
     al_buffer@ buf = al_buffer(ctx);
     buf.set_data(pcm, fmt, sr);

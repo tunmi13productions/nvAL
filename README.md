@@ -56,7 +56,8 @@ void main() {
     al_context@ ctx = al_context(dev);
     ctx.make_current();
 
-    // Load raw PCM into a buffer (see examples/wav_loader.nvgt for a WAV helper)
+    // Decode any audio file to raw PCM (include helpers/al_load.nvgt for al_load()):
+    //   string pcm; int fmt, sr; al_load("test.wav", pcm, fmt, sr);
     al_buffer@ buf = al_buffer(ctx);
     buf.set_data(pcm_bytes, AL_FORMAT_MONO16, 44100);
 
@@ -82,18 +83,78 @@ void main() {
 | `hrtf.nvgt` | HRTF model selection and 3D audio |
 | `device_info.nvgt` | List all devices, extensions, and capabilities |
 
-WAV examples expect `test.wav` (PCM, any bit depth, mono recommended for 3D) in the `examples/` folder. The Opus example expects `test.opus`.
+Examples expect `test.wav` (mono recommended for 3D) or `test.opus` in the `examples/` folder.
 
-### Audio loaders
+### Audio loader
 
-Two `#include`-able helpers provide raw PCM for `al_buffer.set_data()`:
+`helpers/al_load.nvgt` provides `al_load(path, pcm, fmt, sr)` — decodes any audio file (WAV, Ogg Opus, Ogg Vorbis, FLAC, MP3) using NVGT's built-in `audio_decoder`. No plugin required.
 
-| Helper | Formats |
-|--------|---------|
-| `wav_loader.nvgt` / `load_wav()` | RIFF WAV (PCM 8/16/24-bit, WAVEFORMATEXTENSIBLE) |
-| `opus_loader.nvgt` / `load_opus()` | Ogg Opus, Ogg Vorbis, FLAC, WAV, MP3 — anything NVGT's `audio_decoder` handles |
+```angelscript
+#include "../helpers/al_load.nvgt"
+// ...
+string pcm; int fmt, sr;
+if (!al_load("test.wav", pcm, fmt, sr)) { alert("Error", "Could not load audio."); return; }
+```
 
-Both return `(string pcm, int fmt, int sample_rate)` and share the same call signature, so they are interchangeable.
+### Sound class
+
+`helpers/al_sound.nvgt` provides `al_sound` — a wrapper compatible with NVGT's built-in `sound` class. Call `al_set_default_context(ctx)` once, then construct `al_sound` instances. It supports whole-file `load()` and queued `stream()` (call `update()` each frame while streaming). See the comments at the top of the file for the differences from NVGT's `sound`.
+
+### Sound pools
+
+Two pools are provided, in two deliberately different styles — pick whichever fits how you think. Both need a context; include `al_load.nvgt` (and, for the classic pool, `al_sound.nvgt`) first.
+
+| Pool | File | Style |
+|------|------|-------|
+| `al_sound_pool` | `helpers/al_sound_pool.nvgt` | Lean, OpenAL-native: filename→buffer cache (decode once), recycled sources, integer handles |
+| `al_sound_pool_classic` | `helpers/al_sound_pool_classic.nvgt` | The classic NVGT `sound_pool` API: `play_2d`/`play_3d`, ranges, rotation, owners/priority, `update_listener_*` |
+
+Both distinguish **one-shots** (whole file decoded up front — best for short, frequently-repeated SFX) from **streams** (decoded on the fly into a rotating buffer queue — best for music and large files). **When anything is streaming, call the pool's `update()` once per frame** to keep the queue fed; it is a no-op when nothing is streaming, so it is always safe to call.
+
+**`al_sound_pool`** (modern):
+
+```angelscript
+#include "../helpers/al_load.nvgt"
+#include "../helpers/al_sound_pool.nvgt"
+// ...
+al_sound_pool pool(ctx, dev /*optional, for HRTF*/, 32 /*capacity*/);
+
+pool.play_oneshot("step.ogg");            // cached, source recycled when done
+pool.play_oneshot_3d("door.ogg", x, y, z);
+int music = pool.play_stream("music.ogg", true /*looping*/);
+
+// game loop:
+pool.update();   // pumps active streams; harmless when none are
+```
+
+`play()` / `play_3d()` remain as-is (`play_oneshot` / `play_oneshot_3d` are clearer-named aliases). Streams occupy a pooled source until they finish or you `stop_sound()` them, so raise `capacity` if you run several alongside your SFX.
+
+**`al_sound_pool_classic`** (classic `sound_pool` API):
+
+```angelscript
+#include "../helpers/al_load.nvgt"
+#include "../helpers/al_sound.nvgt"
+#include "../helpers/al_sound_pool_classic.nvgt"
+// ...
+al_set_default_context(ctx);
+al_sound_pool_classic pool(ctx);
+
+// One-shots load fully by default (classic behaviour):
+pool.play_2d("step.ogg", listener_x, 0, source_x, 0, false);
+
+// Stream a single sound via the trailing `stream` flag on any *_extended method:
+pool.play_stationary_extended("music.ogg", true /*looping*/, 0, 0.0, 1.0, 100.0,
+                              true /*persistent*/, null, null, true /*stream*/);
+
+// ...or stream everything in this pool:
+pool.stream_by_default = true;
+
+// game loop:
+pool.update_listener_2d(listener_x, listener_y); // also pumps streams
+pool.update();                                   // needed for streams without listener updates
+```
+
+Streaming is opt-in here so short SFX stay low-latency; set `stream_by_default = true` if you'd rather stream everything.
 
 ## License
 

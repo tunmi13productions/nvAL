@@ -1,38 +1,56 @@
-// al_sound_pool.nvgt — OpenAL source pool for nvAL
-//
-// Include wav_loader.nvgt and opus_loader.nvgt before this file.
-// .wav files are loaded via load_wav(); .ogg/.opus/.flac and anything else
-// audio_decoder supports are loaded via load_opus().
+// al_sound_pool.nvgt — OpenAL source pool: cached one-shots + on-the-fly streams.
+// Call update() each frame while streaming. See README for the full API.
+
+// Number of rotating buffers per streaming slot, and frames decoded per chunk.
+const uint AL_POOL_STREAM_BUF_COUNT    = 4;
+const uint AL_POOL_STREAM_CHUNK_FRAMES = 8192;
 
 // -----------------------------------------------------------------------
 // Per-slot metadata (internal)
 // -----------------------------------------------------------------------
 
 class al_pool_slot {
-    al_buffer@ buf;      // currently assigned buffer (null = slot is free)
-    string     filename; // cache key (empty for buffer-only play)
+    al_buffer@ buf;      // currently assigned buffer (null = unused or streaming)
+    string     filename; // cache key (empty for buffer-only play; source path for streams)
     string     owner;    // optional tag for bulk operations
     bool       looping;
     bool       persistent; // if true, not recycled automatically
     bool       paused;
 
+    // Streaming state (only used when streaming == true)
+    bool           streaming;
+    audio_decoder@ dec;
+    array<al_buffer@> stream_bufs; // rotating buffer ring
+    int            stream_fmt;
+    int            stream_sr;
+    int            stream_channels;
+    bool           stream_eof;     // decoder has reached end of file
+
     al_pool_slot() { reset(); }
 
     void reset() {
-        @buf       = null;
-        filename   = "";
-        owner      = "";
-        looping    = false;
-        persistent = false;
-        paused     = false;
+        @buf            = null;
+        filename        = "";
+        owner           = "";
+        looping         = false;
+        persistent      = false;
+        paused          = false;
+        streaming       = false;
+        @dec            = null;
+        stream_bufs.resize(0);
+        stream_fmt      = AL_FORMAT_MONO16;
+        stream_sr       = 44100;
+        stream_channels = 0;
+        stream_eof      = false;
     }
 
     // Returns true when this slot can be recycled.
     bool is_free(al_source@ src) {
-        if (@buf == null)  return true;   // never used
+        if (@buf == null && !streaming) return true;   // never used
         if (persistent)    return false;  // explicitly pinned
         if (looping)       return false;  // loops until stopped
         if (paused)        return false;  // user may want to resume
+        if (streaming)     return stream_eof && src.is_stopped; // stream drained naturally
         return src.is_stopped;            // one-shot that finished naturally
     }
 }
@@ -82,19 +100,27 @@ class al_sound_pool {
     // ----------------------------------------------------------------
 
     // Return a cached buffer for filename, loading and caching it on first use.
-    // .wav files use load_wav(); everything else (.ogg, .opus, .flac, etc.) uses load_opus().
     al_buffer@ get_buffer(const string& in filename) {
         for (uint i = 0; i < cache_names.length(); i++) {
             if (cache_names[i] == filename)
                 return cache_bufs[i];
         }
-        string pcm, err;
+        string pcm;
         int fmt, sr;
-        int dot = filename.find_last(".");
-        string ext = dot >= 0 ? filename.substr(dot + 1).lower() : "";
-        bool ok = (ext == "wav") ? load_wav(filename, pcm, fmt, sr, err)
-                                 : load_opus(filename, pcm, fmt, sr, err);
-        if (!ok) return null;
+        audio_decoder@ dec = audio_decoder();
+        if (!dec.open(filename)) return null;
+        fmt = dec.channels == 1 ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16;
+        sr  = int(dec.sample_rate);
+        datastream ds("", "", STREAM_BYTE_ORDER_LITTLE_ENDIAN);
+        ds.binary = true;
+        while (true) {
+            float[] c = dec.read(4096);
+            if (c.length() == 0) break;
+            for (uint i = 0; i < c.length(); i++) { float s = c[i]; if (s > 1.0) s = 1.0; else if (s < -1.0) s = -1.0; ds.write_int16(int16(s * 32767.0)); }
+        }
+        dec.close();
+        pcm = ds.str();
+        if (pcm.empty()) return null;
         al_buffer@ buf = al_buffer(ctx);
         if (!buf.set_data(pcm, fmt, sr))
             return null;
@@ -181,6 +207,40 @@ class al_sound_pool {
         return i;
     }
 
+    // Aliases for play()/play_3d() — clearer intent next to play_stream().
+    int play_oneshot(al_buffer@ buf, bool looping = false, float gain = -1.0, float pitch = 1.0) {
+        return play(buf, looping, gain, pitch);
+    }
+
+    int play_oneshot(const string& in filename, bool looping = false, float gain = -1.0, float pitch = 1.0) {
+        return play(filename, looping, gain, pitch);
+    }
+
+    int play_oneshot_3d(al_buffer@ buf, float x, float y, float z, bool looping = false, float gain = -1.0, float pitch = 1.0) {
+        return play_3d(buf, x, y, z, looping, gain, pitch);
+    }
+
+    int play_oneshot_3d(const string& in filename, float x, float y, float z, bool looping = false, float gain = -1.0, float pitch = 1.0) {
+        return play_3d(filename, x, y, z, looping, gain, pitch);
+    }
+
+    // Stream a file (music/large files). Needs update() each frame. Returns slot or -1.
+    int play_stream(const string& in filename, bool looping = false, float gain = -1.0, float pitch = 1.0) {
+        return _start_stream(filename, looping, gain, pitch, false, 0.0, 0.0, 0.0);
+    }
+
+    int play_stream_3d(const string& in filename, float x, float y, float z, bool looping = false, float gain = -1.0, float pitch = 1.0) {
+        return _start_stream(filename, looping, gain, pitch, true, x, y, z);
+    }
+
+    // Pump every active streaming slot. Call once per frame from your game loop.
+    // No-op when no streams are playing, so it is always safe to call.
+    void update() {
+        for (uint i = 0; i < slots.length(); i++) {
+            if (slots[i].streaming) _pump_stream(int(i));
+        }
+    }
+
     // ----------------------------------------------------------------
     // Listener — call each frame when the camera/player moves
     // ----------------------------------------------------------------
@@ -207,7 +267,7 @@ class al_sound_pool {
     }
 
     bool resume_sound(int i) {
-        if (!_bounds(i) || @slots[i].buf == null) return false;
+        if (!_bounds(i) || (@slots[i].buf == null && !slots[i].streaming)) return false;
         slots[i].paused = false;
         srcs[i].play();
         return true;
@@ -300,8 +360,9 @@ class al_sound_pool {
     // ----------------------------------------------------------------
 
     bool is_active(int i)  { return _active(i); }
-    bool is_playing(int i) { return _bounds(i) && @slots[i].buf != null && srcs[i].is_playing; }
+    bool is_playing(int i) { return _bounds(i) && (@slots[i].buf != null || slots[i].streaming) && srcs[i].is_playing; }
     bool is_paused(int i)  { return _bounds(i) && slots[i].paused; }
+    bool is_streaming(int i) { return _bounds(i) && slots[i].streaming; }
 
     // Number of slots currently in use.
     int active_count() {
@@ -315,11 +376,14 @@ class al_sound_pool {
     // Total pool capacity.
     int capacity() { return int(srcs.length()); }
 
-    // Release any slots whose one-shot sounds have finished naturally.
+    // Release any slots whose sounds have finished naturally (one-shots that
+    // stopped, or streams that drained). Streaming slots are torn down first.
     void clean_unused() {
         for (uint i = 0; i < slots.length(); i++) {
-            if (@slots[i].buf != null && slots[i].is_free(srcs[i]))
+            if ((@slots[i].buf != null || slots[i].streaming) && slots[i].is_free(srcs[i])) {
+                if (slots[i].streaming) _teardown_stream(int(i));
                 slots[i].reset();
+            }
         }
     }
 
@@ -657,7 +721,20 @@ class al_sound_pool {
     void _setup(int i, al_buffer@ buf, const string& in filename, bool looping, float gain, float pitch, bool positional) {
         srcs[i].stop();
         srcs[i].set_buffer(buf);
-        srcs[i].looping            = looping;
+        srcs[i].looping     = looping;
+        _apply_source_defaults(i, gain, pitch, positional);
+        @slots[i].buf       = buf;
+        slots[i].filename   = filename;
+        slots[i].looping    = looping;
+        slots[i].paused     = false;
+        slots[i].persistent = false;
+        slots[i].streaming  = false;
+        slots[i].owner      = "";
+    }
+
+    // Apply the pool's gain/pitch/distance/spatialization/EFX defaults to a source.
+    // Shared by one-shot and streaming setup.
+    void _apply_source_defaults(int i, float gain, float pitch, bool positional) {
         srcs[i].gain               = gain < 0.0 ? default_gain : gain;
         srcs[i].pitch              = pitch;
         srcs[i].reference_distance = reference_distance;
@@ -674,16 +751,112 @@ class al_sound_pool {
                 srcs[i].set_aux_send(s, global_effects[s], global_send_filters[s]);
             srcs[i].set_direct_filter(global_direct_filter);
         }
-        @slots[i].buf       = buf;
-        slots[i].filename   = filename;
-        slots[i].looping    = looping;
-        slots[i].paused     = false;
-        slots[i].persistent = false;
-        slots[i].owner      = "";
+    }
+
+    // ----------------------------------------------------------------
+    // Streaming internals
+    // ----------------------------------------------------------------
+
+    int _start_stream(const string& in filename, bool looping, float gain, float pitch, bool positional, float x, float y, float z) {
+        int i = _reserve();
+        if (i < 0) return -1;
+        audio_decoder@ dec = audio_decoder();
+        if (!dec.open(filename)) return -1;
+
+        al_pool_slot@ s = slots[i];
+        s.reset();
+        s.streaming       = true;
+        @s.dec            = dec;
+        s.stream_channels = dec.channels;
+        s.stream_fmt      = dec.channels == 1 ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16;
+        s.stream_sr       = int(dec.sample_rate);
+        s.stream_eof      = false;
+        s.filename        = filename;
+        s.looping         = looping;
+        s.stream_bufs.resize(AL_POOL_STREAM_BUF_COUNT);
+        for (uint k = 0; k < AL_POOL_STREAM_BUF_COUNT; k++)
+            @s.stream_bufs[k] = al_buffer(ctx);
+
+        // Detach any static buffer left from a previous one-shot so the source
+        // can accept a buffer queue, and never use source-level looping for a
+        // stream (that would loop a single chunk).
+        srcs[i].stop();
+        while (srcs[i].buffers_processed > 0) srcs[i].unqueue_buffer();
+        srcs[i].set_buffer(null);
+        srcs[i].looping = false;
+        _apply_source_defaults(i, gain, pitch, positional);
+        if (positional) srcs[i].set_position(x, y, z);
+
+        _prefill_stream(i);
+        srcs[i].play();
+        return i;
+    }
+
+    // Decode one chunk into buf. Returns false at end of file (sets stream_eof).
+    bool _fill_stream_buf(int i, al_buffer@ buf) {
+        al_pool_slot@ s = slots[i];
+        if (s.stream_eof || @s.dec == null || @buf == null) return false;
+        int ch = s.stream_channels > 0 ? s.stream_channels : 1;
+        float[] c = s.dec.read(AL_POOL_STREAM_CHUNK_FRAMES * uint(ch));
+        if (c.length() == 0) { s.stream_eof = true; return false; }
+        datastream ds("", "", STREAM_BYTE_ORDER_LITTLE_ENDIAN);
+        ds.binary = true;
+        for (uint k = 0; k < c.length(); k++) {
+            float v = c[k];
+            if (v >  1.0) v =  1.0;
+            else if (v < -1.0) v = -1.0;
+            ds.write_int16(int16(v * 32767.0));
+        }
+        return buf.set_data(ds.str(), s.stream_fmt, s.stream_sr);
+    }
+
+    // Fill every ring buffer and queue it on the source.
+    void _prefill_stream(int i) {
+        al_pool_slot@ s = slots[i];
+        for (uint k = 0; k < s.stream_bufs.length(); k++) {
+            if (!_fill_stream_buf(i, s.stream_bufs[k])) break;
+            srcs[i].queue_buffer(s.stream_bufs[k]);
+        }
+    }
+
+    // Recycle processed buffers back into the queue; handle loop + underrun.
+    void _pump_stream(int i) {
+        al_pool_slot@ s = slots[i];
+        if (@s.dec == null) return;
+        int processed = srcs[i].buffers_processed;
+        for (int p = 0; p < processed; p++) {
+            al_buffer@ old = srcs[i].unqueue_buffer();
+            if (@old == null) continue;
+            if (!s.stream_eof) {
+                if (_fill_stream_buf(i, old))
+                    srcs[i].queue_buffer(old);
+                else if (s.looping) {           // hit EOF this read — reopen and continue
+                    s.dec.close();
+                    s.dec.open(s.filename);
+                    s.stream_eof = false;
+                    if (_fill_stream_buf(i, old)) srcs[i].queue_buffer(old);
+                }
+            }
+        }
+        // Restart if the source stalled on a buffer underrun mid-stream.
+        if (!s.paused && srcs[i].is_stopped && srcs[i].buffers_queued > 0)
+            srcs[i].play();
+    }
+
+    // Stop the source, drain its queue, and close the decoder.
+    void _teardown_stream(int i) {
+        srcs[i].stop();
+        while (srcs[i].buffers_processed > 0) srcs[i].unqueue_buffer();
+        srcs[i].set_buffer(null); // return source to undetermined state
+        if (@slots[i].dec != null) { slots[i].dec.close(); @slots[i].dec = null; }
+        slots[i].stream_bufs.resize(0);
+        slots[i].streaming  = false;
+        slots[i].stream_eof = false;
     }
 
     void _stop_slot(int i) {
         srcs[i].stop();
+        if (slots[i].streaming) _teardown_stream(i);
         if (nval_efx_available()) {
             for (int s = 0; s < 4; s++)
                 srcs[i].set_aux_send(s, null, null);
@@ -693,5 +866,5 @@ class al_sound_pool {
     }
 
     bool _bounds(int i) { return i >= 0 && i < int(slots.length()); }
-    bool _active(int i) { return _bounds(i) && @slots[i].buf != null && !slots[i].is_free(srcs[i]); }
+    bool _active(int i) { return _bounds(i) && (@slots[i].buf != null || slots[i].streaming) && !slots[i].is_free(srcs[i]); }
 }

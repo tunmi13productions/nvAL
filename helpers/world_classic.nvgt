@@ -1,0 +1,87 @@
+// world_classic.nvgt — 20x20 audio world demo using al_sound_pool_classic
+// Sounds from sounds/w1.ogg, sounds/w2.ogg, sounds/w3.ogg are scattered across the grid.
+// Left/Right = X, Up/Down = Y, C = coordinates, H = toggle HRTF, Escape = quit.
+
+#pragma plugin nval
+#include "al_sound.nvgt"
+#include "al_sound_pool_classic.nvgt"
+
+void main() {
+    show_window("nvAL - World (Classic Pool)");
+
+    if (!nval_is_loaded()) { alert("Error", "OpenAL failed to load."); return; }
+
+    al_device@ dev = al_device();
+    dev.open();
+    al_context@ ctx = al_context(dev);
+    ctx.make_current();
+
+    // Face +Y (forward), Z-up.
+    ctx.set_listener_orientation(0.0, 1.0, 0.0,  0.0, 0.0, 1.0);
+
+    al_set_default_context(ctx);
+    al_sound_pool_classic pool(ctx);
+    pool.max_distance = 15;
+    pool.stream_by_default = true; // stream every sound instead of fully loading (pumped via update_listener_*)
+
+    bool hrtf_on = false;
+    if (dev.hrtf_available && dev.hrtf_count > 0)
+        hrtf_on = dev.enable_hrtf(0);
+
+    float px = 10.0, py = 10.0;
+
+    // 8 looping sounds scattered across the 20x20 world.
+    string[] files = {
+        "sounds/w1.ogg", "sounds/w2.ogg", "sounds/w3.ogg",
+        "sounds/w1.ogg", "sounds/w2.ogg", "sounds/w1.ogg",
+        "sounds/w2.ogg", "sounds/w1.ogg"
+    };
+    float[] sx = {  5, 15, 10,  2, 18, 10,  5, 15 };
+    float[] sy = {  5,  5, 15, 10, 10,  2, 15, 15 };
+
+    for (uint i = 0; i < files.length(); i++)
+        pool.play_3d(files[i], px, py, 0.0, sx[i], sy[i], 0.0, 0.0, true);
+
+    pool.update_listener_3d(px, py, 0.0);
+    timer step_timer;
+
+    screen_reader_output("Audio world (classic pool). 20x20 grid, starting at center. Left/Right = X, Up/Down = Y, H = HRTF, C = coords, Escape = quit.", false);
+
+    while (true) {
+        wait(10);
+        if (key_pressed(KEY_ESCAPE)) break;
+
+        bool any_key = key_down(KEY_LEFT) || key_down(KEY_RIGHT) ||
+                       key_down(KEY_UP)   || key_down(KEY_DOWN);
+
+        if (any_key && step_timer.elapsed >= 250) {
+            if (key_down(KEY_LEFT)  && px > 0)  px -= 1.0;
+            if (key_down(KEY_RIGHT) && px < 19) px += 1.0;
+            if (key_down(KEY_UP)    && py < 19) py += 1.0;
+            if (key_down(KEY_DOWN)  && py > 0)  py -= 1.0;
+            pool.update_listener_3d(px, py, 0.0);
+            step_timer.restart();
+            screen_reader_output("X " + int(px) + "  Y " + int(py), true);
+        } else if (!any_key) {
+            step_timer.restart();
+        }
+
+        if (key_pressed(KEY_C))
+            screen_reader_output("X " + int(px) + "  Y " + int(py), true);
+
+        if (key_pressed(KEY_H)) {
+            if (hrtf_on) {
+                dev.disable_hrtf();
+                hrtf_on = false;
+                screen_reader_output("HRTF disabled.", true);
+            } else if (dev.hrtf_available) {
+                hrtf_on = dev.enable_hrtf(0);
+                screen_reader_output(hrtf_on ? "HRTF enabled: " + dev.get_hrtf_name(0) : "HRTF failed.", true);
+            } else {
+                screen_reader_output("HRTF not available.", true);
+            }
+        }
+    }
+
+    pool.destroy_all();
+}

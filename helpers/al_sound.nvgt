@@ -1,0 +1,609 @@
+// al_sound.nvgt — wrapper matching NVGT's built-in sound class, backed by nvAL.
+// Call al_set_default_context(ctx) before constructing instances.
+//
+// Not everything from NVGT's sound is supported: stream() needs update() each frame;
+// stream_url/stream_pcm, timed fades, scheduling, mixers/buses are stubs or no-ops;
+// load_memory() is WAV-only; pan affects mono sources only. See README for details.
+
+const uint STREAM_BUF_COUNT    = 4;     // number of rotating streaming buffers
+const uint STREAM_CHUNK_FRAMES = 8192;  // sample frames per streaming chunk
+
+al_context@ _al_sound_default_ctx;
+
+// Set the context used when al_sound() is constructed with no arguments.
+void al_set_default_context(al_context@ ctx) {
+    @_al_sound_default_ctx = ctx;
+}
+
+class al_sound {
+    // ------------------------------------------------------------------
+    // Private state
+    // ------------------------------------------------------------------
+
+    al_context@ _ctx;
+    al_source@  _src;
+    al_buffer@  _buf;
+
+    string _filename;
+    float  _pan;
+    bool   _looping;
+    bool   _spatialization;
+    bool   _autoclose;
+    bool   _was_playing;   // true after play(); cleared by stop() / close()
+
+    // Buffer geometry (derived from al_buffer after load)
+    int  _buf_sample_rate;
+    int  _buf_channels;
+    uint _buf_samples;     // total sample frames in the buffer (0 when streaming)
+
+    // Streaming state
+    audio_decoder@ _dec;
+    bool           _streaming;
+    bool           _stream_eof;
+    int            _stream_fmt;
+    int            _stream_sr;
+    al_buffer@[]   _stream_bufs;
+
+    // ------------------------------------------------------------------
+    // Construction
+    // ------------------------------------------------------------------
+
+    al_sound() { _init(_al_sound_default_ctx); }
+    al_sound(al_context@ ctx) { _init(ctx); }
+
+    void _init(al_context@ ctx) {
+        @_ctx            = ctx;
+        _pan             = 0.0;
+        _looping         = false;
+        _spatialization  = false;
+        _autoclose       = false;
+        _was_playing     = false;
+        _buf_sample_rate = 0;
+        _buf_channels    = 0;
+        _buf_samples     = 0;
+        _streaming       = false;
+        _stream_eof      = false;
+        _stream_fmt      = AL_FORMAT_MONO16;
+        _stream_sr       = 44100;
+        if (@_ctx != null) {
+            @_src = al_source(_ctx);
+            _src.source_relative = true;
+            _src.set_position(0.0, 0.0, -1.0); // centre pan
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Loading
+    // ------------------------------------------------------------------
+
+    bool load(const string& in filename, pack_interface@ pack = null) {
+        if (!_reset_buf()) return false;
+        audio_decoder@ dec = audio_decoder();
+        if (!dec.open(filename)) return false;
+        int fmt = dec.channels == 1 ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16;
+        int sr  = int(dec.sample_rate);
+        datastream ds("", "", STREAM_BYTE_ORDER_LITTLE_ENDIAN);
+        ds.binary = true;
+        while (true) {
+            float[] c = dec.read(4096);
+            if (c.length() == 0) break;
+            for (uint i = 0; i < c.length(); i++) { float s = c[i]; if (s > 1.0) s = 1.0; else if (s < -1.0) s = -1.0; ds.write_int16(int16(s * 32767.0)); }
+        }
+        dec.close();
+        string pcm = ds.str();
+        if (pcm.empty()) return false;
+        return _attach(pcm, fmt, sr, filename);
+    }
+
+    // Open a file for streaming. Fills the buffer queue but does not start playback.
+    // Call play() to start, then update() in your game loop to pump data.
+    bool stream(const string& in filename, pack_interface@ pack = null) {
+        _close_stream();
+        if (!_reset_buf()) return false;
+        @_dec = audio_decoder();
+        if (!_dec.open(filename)) { @_dec = null; return false; }
+        _stream_fmt      = _dec.channels == 1 ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16;
+        _stream_sr       = int(_dec.sample_rate);
+        _buf_channels    = _dec.channels;
+        _buf_sample_rate = _stream_sr;
+        _buf_samples     = 0;
+        _filename        = filename;
+        _streaming       = true;
+        _stream_eof      = false;
+        _stream_bufs.resize(STREAM_BUF_COUNT);
+        for (uint i = 0; i < STREAM_BUF_COUNT; i++)
+            @_stream_bufs[i] = al_buffer(_ctx);
+        _prefill_stream();
+        return true;
+    }
+
+    // Must be called every frame while a stream is active to keep the buffer queue fed.
+    void update() {
+        if (!_streaming || @_src == null || @_dec == null) return;
+        int processed = _src.buffers_processed;
+        for (int i = 0; i < processed; i++) {
+            al_buffer@ old = _src.unqueue_buffer();
+            if (@old == null) continue;
+            if (!_stream_eof) {
+                if (_fill_stream_buf(old))
+                    _src.queue_buffer(old);
+                else if (_looping) {
+                    _dec.close();
+                    _dec.open(_filename);
+                    _stream_eof = false;
+                    if (_fill_stream_buf(old)) _src.queue_buffer(old);
+                }
+            }
+        }
+        // Restart if source stalled (buffer underrun)
+        if (_was_playing && _src.is_stopped && _src.buffers_queued > 0)
+            _src.play();
+    }
+
+    bool stream_url(const string& in url) { return false; }
+
+    // Supports WAV from memory only.
+    bool load_memory(const string& in data) {
+        if (@_src == null) return false;
+        if (data.length() < 4 || data.substr(0, 4) != "RIFF") return false;
+        string pcm, err;
+        int fmt, sr;
+        if (!_parse_wav(data, pcm, fmt, sr, err)) return false;
+        if (!_reset_buf()) return false;
+        return _attach(pcm, fmt, sr, "");
+    }
+
+    bool load_pcm(const array<float>@ data, int samplerate, int channels) {
+        if (@data == null || data.length() == 0) return false;
+        datastream ds("", "", STREAM_BYTE_ORDER_LITTLE_ENDIAN);
+        ds.binary = true;
+        for (uint i = 0; i < data.length(); i++) {
+            float s = data[i];
+            if (s >  1.0) s =  1.0;
+            if (s < -1.0) s = -1.0;
+            ds.write_int16(int16(s * 32767.0));
+        }
+        return _load_raw(ds.str(), AL_FORMAT_MONO16, AL_FORMAT_STEREO16,
+                         samplerate, channels, uint(data.length()) / uint(channels > 0 ? channels : 1));
+    }
+
+    bool load_pcm(const array<int16>@ data, int samplerate, int channels) {
+        if (@data == null || data.length() == 0) return false;
+        datastream ds("", "", STREAM_BYTE_ORDER_LITTLE_ENDIAN);
+        ds.binary = true;
+        for (uint i = 0; i < data.length(); i++) ds.write_int16(data[i]);
+        return _load_raw(ds.str(), AL_FORMAT_MONO16, AL_FORMAT_STEREO16,
+                         samplerate, channels, uint(data.length()) / uint(channels > 0 ? channels : 1));
+    }
+
+    bool load_pcm(const array<int>@ data, int samplerate, int channels) {
+        if (@data == null || data.length() == 0) return false;
+        datastream ds("", "", STREAM_BYTE_ORDER_LITTLE_ENDIAN);
+        ds.binary = true;
+        for (uint i = 0; i < data.length(); i++) {
+            int v = data[i];
+            if (v >  32767) v =  32767;
+            if (v < -32768) v = -32768;
+            ds.write_int16(int16(v));
+        }
+        return _load_raw(ds.str(), AL_FORMAT_MONO16, AL_FORMAT_STEREO16,
+                         samplerate, channels, uint(data.length()) / uint(channels > 0 ? channels : 1));
+    }
+
+    bool load_pcm(const array<uint8>@ data, int samplerate, int channels) {
+        if (@data == null || data.length() == 0) return false;
+        string raw;
+        for (uint i = 0; i < data.length(); i++) raw += data[i];
+        return _load_raw(raw, AL_FORMAT_MONO8, AL_FORMAT_STEREO8,
+                         samplerate, channels, uint(data.length()) / uint(channels > 0 ? channels : 1));
+    }
+
+    bool close() {
+        _close_stream();
+        _reset_buf();
+        return true;
+    }
+
+    // ------------------------------------------------------------------
+    // Playback
+    // ------------------------------------------------------------------
+
+    bool play(bool reset_loop_state = true) {
+        if (@_src == null) return false;
+        if (_streaming) {
+            if (_src.is_paused) { _was_playing = true; _src.play(); return true; }
+            // Restart: drain queue, reopen decoder, refill, play.
+            _src.stop();
+            while (_src.buffers_processed > 0) _src.unqueue_buffer();
+            if (@_dec != null) { _dec.close(); _dec.open(_filename); }
+            _stream_eof = false;
+            _prefill_stream();
+            _was_playing = true;
+            _src.play();
+            return true;
+        }
+        if (@_buf == null) return false;
+        if (reset_loop_state) {
+            _src.looping = _looping;
+            _src.stop();
+        }
+        _was_playing = true;
+        _src.play();
+        return true;
+    }
+
+    bool play_looped() {
+        if (@_src == null) return false;
+        _looping = true;
+        if (!_streaming) _src.looping = true;
+        if (_streaming) {
+            if (_src.is_paused) { _was_playing = true; _src.play(); return true; }
+            _src.stop();
+            while (_src.buffers_processed > 0) _src.unqueue_buffer();
+            if (@_dec != null) { _dec.close(); _dec.open(_filename); }
+            _stream_eof = false;
+            _prefill_stream();
+            _was_playing = true;
+            _src.play();
+            return true;
+        }
+        if (@_buf == null) return false;
+        _was_playing = true;
+        _src.play();
+        return true;
+    }
+
+    bool play_wait() {
+        if (!play()) return false;
+        while (_src.is_playing) { if (_streaming) update(); wait(10); }
+        return true;
+    }
+
+    bool stop() {
+        if (@_src == null) return false;
+        _was_playing = false;
+        _src.stop();
+        if (_streaming) while (_src.buffers_processed > 0) _src.unqueue_buffer();
+        return true;
+    }
+
+    bool pause() {
+        if (@_src == null || !_src.is_playing) return false;
+        _src.pause();
+        return true;
+    }
+
+    // ------------------------------------------------------------------
+    // Volume / Pitch / Pan / Looping
+    // ------------------------------------------------------------------
+
+    void set_volume(float v) property  { if (@_src != null) _src.gain = v; }
+    float get_volume() const property  { return @_src != null ? _src.gain : 0.0; }
+
+    void set_pitch(float p) property   { if (@_src != null) _src.pitch = p; }
+    float get_pitch() const property   { return @_src != null ? _src.pitch : 1.0; }
+
+    // Pan: -1.0 (full left) to 1.0 (full right).
+    // Implemented via equal-power positioning in source-relative mode.
+    // Has no effect when spatialization_enabled is true.
+    void set_pan(float p) property {
+        _pan = p;
+        if (@_src != null && !_spatialization) _apply_pan();
+    }
+    float get_pan() const property { return _pan; }
+
+    void set_pan_mode(audio_pan_mode mode) property {}   // no-op — not applicable to OpenAL
+    audio_pan_mode get_pan_mode() const property { return audio_pan_mode(0); }
+
+    void set_looping(bool l) property {
+        _looping = l;
+        if (@_src != null) _src.looping = l;
+    }
+    bool get_looping() const property { return _looping; }
+
+    void set_autoclose(bool en) property { _autoclose = en; }
+    bool get_autoclose() const property  { return _autoclose; }
+
+    // ------------------------------------------------------------------
+    // Status
+    // ------------------------------------------------------------------
+
+    bool get_playing() const property       { return @_src != null && _src.is_playing; }
+    bool get_paused() const property        { return @_src != null && _src.is_paused; }
+    bool get_active() const property        { return @_buf != null || _streaming; }
+    bool get_load_complete() const property { return @_buf != null || _streaming; }
+
+    // True when a non-looping sound has played all the way through.
+    bool get_at_end() const property {
+        if (!_was_playing || _looping) return false;
+        if (_streaming) return _stream_eof && _src.is_stopped;
+        if (@_buf == null) return false;
+        return _src.is_stopped;
+    }
+
+    const string& get_loaded_filename() const property { return _filename; }
+
+    // ------------------------------------------------------------------
+    // Position / Length / Seek
+    // ------------------------------------------------------------------
+
+    uint64 get_position() property                 { return @_src != null ? uint64(_src.sample_offset) : 0; }
+    uint64 get_position_in_frames() const property { return @_src != null ? uint64(_src.sample_offset) : 0; }
+    uint64 get_position_in_milliseconds() const property {
+        if (@_src == null || _buf_sample_rate == 0) return 0;
+        return uint64(_src.sec_offset * 1000.0);
+    }
+
+    bool seek(const uint64 position) {
+        if (@_src == null) return false;
+        _src.sample_offset = float(position);
+        return true;
+    }
+    bool seek_in_frames(const uint64 position)    { return seek(position); }
+    bool seek_in_milliseconds(const uint64 ms) {
+        if (@_src == null) return false;
+        _src.sec_offset = float(ms) / 1000.0;
+        return true;
+    }
+
+    uint64 get_length() property                 { return uint64(_buf_samples); }
+    uint64 get_length_in_frames() const property { return uint64(_buf_samples); }
+    uint64 get_length_in_ms() const property {
+        if (_buf_sample_rate == 0) return 0;
+        return uint64(double(_buf_samples) / double(_buf_sample_rate) * 1000.0);
+    }
+
+    // ------------------------------------------------------------------
+    // Spatialization / 3D
+    // ------------------------------------------------------------------
+
+    void set_spatialization_enabled(bool en) property {
+        _spatialization = en;
+        if (@_src == null) return;
+        _src.source_relative = !en;
+        // Uncomment after rebuilding nval with AL_SOFT_source_spatialize support:
+        // Forces stereo sources to mono when in 3D space; reverts to default otherwise.
+        _src.spatialize = en ? 1 : 2;  // 1=AL_TRUE, 2=AL_AUTO_SOFT
+        if (!en)
+            _apply_pan();    // restore pan-based position
+        else
+            _src.set_position(0.0, 0.0, 0.0);
+    }
+    bool get_spatialization_enabled() const property { return _spatialization; }
+
+    void set_position_3d(float x, float y, float z)   { if (@_src != null) _src.set_position(x, y, z); }
+    void set_position_3d(const vector& in pos)         { if (@_src != null) _src.set_position(pos.x, pos.y, pos.z); }
+    vector get_position_3d() const {
+        vector v;
+        if (@_src != null) { v.x = _src.x; v.y = _src.y; v.z = _src.z; }
+        return v;
+    }
+
+    void set_direction(float x, float y, float z)     { if (@_src != null) _src.set_direction(x, y, z); }
+    void set_direction(const vector& in dir)           { if (@_src != null) _src.set_direction(dir.x, dir.y, dir.z); }
+    vector get_direction() const {
+        vector v;
+        if (@_src != null) { v.x = _src.direction_x; v.y = _src.direction_y; v.z = _src.direction_z; }
+        return v;
+    }
+
+    void set_velocity(float x, float y, float z)      { if (@_src != null) _src.set_velocity(x, y, z); }
+    void set_velocity(const vector& in vel)            { if (@_src != null) _src.set_velocity(vel.x, vel.y, vel.z); }
+    vector get_velocity() const {
+        vector v;
+        if (@_src != null) { v.x = _src.velocity_x; v.y = _src.velocity_y; v.z = _src.velocity_z; }
+        return v;
+    }
+
+    // ------------------------------------------------------------------
+    // Attenuation
+    // ------------------------------------------------------------------
+
+    void set_rolloff(float r) property  { if (@_src != null) _src.rolloff_factor = r; }
+    float get_rolloff() const property  { return @_src != null ? _src.rolloff_factor : 1.0; }
+
+    void set_min_gain(float g) property { if (@_src != null) _src.min_gain = g; }
+    float get_min_gain() const property { return @_src != null ? _src.min_gain : 0.0; }
+
+    void set_max_gain(float g) property { if (@_src != null) _src.max_gain = g; }
+    float get_max_gain() const property { return @_src != null ? _src.max_gain : 1.0; }
+
+    void set_min_distance(float d) property { if (@_src != null) _src.reference_distance = d; }
+    float get_min_distance() const property { return @_src != null ? _src.reference_distance : 1.0; }
+
+    void set_max_distance(float d) property { if (@_src != null) _src.max_distance = d; }
+    float get_max_distance() const property { return @_src != null ? _src.max_distance : 0.0; }
+
+    void set_cone(float inner_deg, float outer_deg, float outer_gain) {
+        if (@_src == null) return;
+        _src.cone_inner_angle = inner_deg;
+        _src.cone_outer_angle = outer_deg;
+        _src.cone_outer_gain  = outer_gain;
+    }
+    void get_cone(float& out inner_deg, float& out outer_deg, float& out outer_gain) {
+        if (@_src == null) { inner_deg = 360.0; outer_deg = 360.0; outer_gain = 0.0; return; }
+        inner_deg  = _src.cone_inner_angle;
+        outer_deg  = _src.cone_outer_angle;
+        outer_gain = _src.cone_outer_gain;
+    }
+
+    // ------------------------------------------------------------------
+    // Doppler
+    // OpenAL's doppler factor is context-wide; setting it here affects all
+    // sources on the same context.
+    // ------------------------------------------------------------------
+
+    void set_doppler_factor(float f) property { if (@_ctx != null) _ctx.set_doppler_factor(f); }
+    float get_doppler_factor() const property { return 1.0; } // read-back not available per-source
+
+    // ------------------------------------------------------------------
+    // Fade / schedule stubs (API compatibility — not implemented)
+    // ------------------------------------------------------------------
+
+    void set_fade(float start_volume, float end_volume, uint64 length) {}
+    void set_fade_in_frames(float start_volume, float end_volume, uint64 length_frames) {}
+    void set_fade_in_milliseconds(float start_volume, float end_volume, uint64 length_ms) {}
+    float get_current_fade_volume() const property { return get_volume(); }
+
+    bool pause_fade(const uint64 length)                         { return pause(); }
+    bool pause_fade_in_frames(const uint64 length_in_frames)     { return pause(); }
+    bool pause_fade_in_milliseconds(const uint64 length_in_ms)   { return pause(); }
+
+    void set_timed_fade(float sv, float ev, uint64 len, uint64 abs_time) {}
+    void set_timed_fade_in_frames(float sv, float ev, uint64 len, uint64 abs_time) {}
+    void set_timed_fade_in_milliseconds(float sv, float ev, uint64 len, uint64 abs_time) {}
+
+    void set_start_time(uint64 absolute_time) property {}
+    void set_stop_time(uint64 absolute_time) {}
+    void set_stop_time_with_fade(uint64 absolute_time, uint64 fade_length) {}
+    void set_stop_time_with_fade_in_frames(uint64 absolute_time, uint64 fade_length) {}
+    void set_stop_time_with_fade_in_milliseconds(uint64 absolute_time, uint64 fade_length) {}
+
+    double get_pitch_lower_limit() const property { return 0.5; }
+
+    // ------------------------------------------------------------------
+    // Direct source access
+    // ------------------------------------------------------------------
+
+    al_source@ get_source() const property { return _src; }
+
+    // ------------------------------------------------------------------
+    // Private helpers
+    // ------------------------------------------------------------------
+
+    // Stop and detach the current buffer (or stream); reset buffer metadata.
+    // Volume, pitch, pan, looping, and source settings are preserved.
+    bool _reset_buf() {
+        if (@_src == null) return false;
+        if (_streaming) _close_stream();
+        _src.stop();
+        if (@_buf != null) _src.set_buffer(null);
+        @_buf            = null;
+        _filename        = "";
+        _was_playing     = false;
+        _buf_sample_rate = 0;
+        _buf_channels    = 0;
+        _buf_samples     = 0;
+        return true;
+    }
+
+    bool _attach(const string& in pcm, int fmt, int sr, const string& in filename) {
+        @_buf = al_buffer(_ctx);
+        if (!_buf.set_data(pcm, fmt, sr)) { @_buf = null; return false; }
+        _filename        = filename;
+        _buf_sample_rate = sr;
+        _buf_channels    = _buf.channels;
+        _buf_samples     = uint(_buf.size) / uint(_buf_channels * (_buf.bits / 8));
+        _src.set_buffer(_buf);
+        return true;
+    }
+
+    bool _load_raw(const string& in raw, int fmt_mono, int fmt_stereo,
+                   int sample_rate, int channels, uint samples) {
+        if (!_reset_buf()) return false;
+        int fmt = (channels == 1) ? fmt_mono : fmt_stereo;
+        @_buf = al_buffer(_ctx);
+        if (!_buf.set_data(raw, fmt, sample_rate)) { @_buf = null; return false; }
+        _filename        = "";
+        _buf_sample_rate = sample_rate;
+        _buf_channels    = channels;
+        _buf_samples     = samples;
+        _src.set_buffer(_buf);
+        return true;
+    }
+
+    void _apply_pan() {
+        // Equal-power panning: place source in the horizontal plane around the listener.
+        // pan = -1 → full left (−90°), 0 → centre, 1 → full right (+90°)
+        // Y-forward, Z-up orientation: pan circle lies in the XY plane.
+        // pan=0 → (0,1,0) = centre-front; ±1 → full left/right on X.
+        float rad = _pan * 1.5707963f; // PI/2
+        _src.set_position(sin(rad), cos(rad), 0.0);
+    }
+
+    // Decode one chunk from _dec into buf and upload to OpenAL. Returns false on EOF.
+    bool _fill_stream_buf(al_buffer@ buf) {
+        if (_stream_eof || @_dec == null || @buf == null) return false;
+        float[] c = _dec.read(STREAM_CHUNK_FRAMES * uint(_buf_channels > 0 ? _buf_channels : 1));
+        if (c.length() == 0) { _stream_eof = true; return false; }
+        datastream ds("", "", STREAM_BYTE_ORDER_LITTLE_ENDIAN);
+        ds.binary = true;
+        for (uint i = 0; i < c.length(); i++) {
+            float s = c[i];
+            if (s >  1.0) s =  1.0;
+            if (s < -1.0) s = -1.0;
+            ds.write_int16(int16(s * 32767.0));
+        }
+        return buf.set_data(ds.str(), _stream_fmt, _stream_sr);
+    }
+
+    // Fill all streaming buffers and queue them on _src.
+    void _prefill_stream() {
+        for (uint i = 0; i < _stream_bufs.length(); i++) {
+            if (!_fill_stream_buf(_stream_bufs[i])) break;
+            _src.queue_buffer(_stream_bufs[i]);
+        }
+    }
+
+    // Drain the buffer queue and tear down the streaming decoder.
+    void _close_stream() {
+        if (!_streaming) return;
+        if (@_src != null) {
+            _src.stop();
+            while (_src.buffers_processed > 0) _src.unqueue_buffer();
+        }
+        if (@_dec != null) { _dec.close(); @_dec = null; }
+        _stream_bufs.resize(0);
+        _streaming  = false;
+        _stream_eof = false;
+    }
+
+    // Parse a WAV file from an in-memory byte string.
+    bool _parse_wav(const string& in data, string& out pcm, int& out fmt, int& out sample_rate, string& out reason) {
+        if (data.length() < 12) { reason = "too small"; return false; }
+        datastream ds(data, "", STREAM_BYTE_ORDER_LITTLE_ENDIAN);
+        ds.binary = true;
+        if (ds.read(4) != "RIFF") { reason = "not RIFF"; return false; }
+        ds.read_uint();
+        if (ds.read(4) != "WAVE") { reason = "not WAVE"; return false; }
+        uint16 ch = 0, bits = 0;
+        uint sr = 0;
+        bool found_fmt = false, found_data = false;
+        while (!ds.eof && !(found_fmt && found_data)) {
+            string id   = ds.read(4);
+            uint   size = ds.read_uint();
+            if (id.length() < 4) break;
+            if (id == "fmt ") {
+                uint16 tag = ds.read_uint16();
+                if (tag != 1 && tag != 0xFFFE) { ds.read(size - 2); continue; }
+                ch   = ds.read_uint16();
+                sr   = ds.read_uint();
+                ds.read_uint(); ds.read_uint16();
+                bits = ds.read_uint16();
+                if (size > 16) ds.read(size - 16);
+                found_fmt = true;
+            } else if (id == "data") {
+                if (!found_fmt) { reason = "data before fmt"; return false; }
+                pcm = ds.read(size);
+                found_data = true;
+            } else {
+                ds.read(size + (size % 2));
+            }
+        }
+        if (!found_fmt || !found_data) { reason = "missing chunks"; return false; }
+        if (bits == 24) {
+            string out16;
+            uint n = pcm.length() / 3;
+            for (uint i = 0; i < n; i++) { out16 += pcm[i*3+1]; out16 += pcm[i*3+2]; }
+            pcm  = out16;
+            bits = 16;
+        }
+        if      (ch == 1 && bits == 8)  fmt = AL_FORMAT_MONO8;
+        else if (ch == 1 && bits == 16) fmt = AL_FORMAT_MONO16;
+        else if (ch == 2 && bits == 8)  fmt = AL_FORMAT_STEREO8;
+        else if (ch == 2 && bits == 16) fmt = AL_FORMAT_STEREO16;
+        else { reason = "unsupported " + ch + "ch " + bits + "bit"; return false; }
+        sample_rate = int(sr);
+        return true;
+    }
+}

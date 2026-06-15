@@ -6,8 +6,6 @@
 // C = coordinates, Escape = quit.
 
 #pragma plugin nval
-#include "wav_loader.nvgt"
-#include "opus_loader.nvgt"
 #include "al_sound_pool.nvgt"
 
 void main() {

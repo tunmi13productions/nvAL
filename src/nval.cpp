@@ -54,6 +54,9 @@ typedef const ALCchar* (ALC_APIENTRY *LPALCGETSTRINGISOFT)(ALCdevice*, ALCenum, 
 // EFX constants
 // ============================================================
 
+#define AL_SOURCE_SPATIALIZE_SOFT            0x1214
+#define AL_AUTO_SOFT                         0x0002
+
 #define AL_DIRECT_FILTER                     0x20005
 #define AL_AUXILIARY_SEND_FILTER             0x20006
 #define AL_EFFECT_TYPE                       0x8001
@@ -669,6 +672,10 @@ public:
 	void set_source_relative(bool v) { if (m_id) p_alSourcei(m_id, AL_SOURCE_RELATIVE, v ? AL_TRUE : AL_FALSE); }
 	bool get_source_relative() const { ALint v=AL_FALSE; if (m_id) p_alGetSourcei(m_id, AL_SOURCE_RELATIVE, &v); return v==AL_TRUE; }
 
+	// AL_SOFT_source_spatialize: AL_FALSE=never, AL_TRUE=always force mono, AL_AUTO_SOFT=default
+	void set_spatialize(int v)  { if (m_id) p_alSourcei(m_id, AL_SOURCE_SPATIALIZE_SOFT, (ALint)v); }
+	int  get_spatialize() const { ALint v = AL_AUTO_SOFT; if (m_id) p_alGetSourcei(m_id, AL_SOURCE_SPATIALIZE_SOFT, &v); return (int)v; }
+
 	// EFX — direct filter
 	void set_direct_filter(al_filter* flt) {
 		if (!m_id || !g_efx_loaded) return;
@@ -983,6 +990,8 @@ static bool register_al_source(asIScriptEngine* e) {
 	CHECK(e->RegisterObjectMethod("al_source", "float get_cone_outer_gain() const property", asMETHOD(al_source, get_cone_outer_gain), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_source", "void set_source_relative(bool) property", asMETHOD(al_source, set_source_relative), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_source", "bool get_source_relative() const property", asMETHOD(al_source, get_source_relative), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_source", "void set_spatialize(int) property", asMETHOD(al_source, set_spatialize), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_source", "int get_spatialize() const property", asMETHOD(al_source, get_spatialize), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_source", "void set_direct_filter(al_filter@)", asMETHOD(al_source, set_direct_filter), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_source", "void set_aux_send(int, al_aux_slot@, al_filter@)", asMETHOD(al_source, set_aux_send), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_source", "bool get_efx_available() const property", asMETHOD(al_source, get_efx_available), asCALL_THISCALL));
@@ -1106,6 +1115,9 @@ static bool register_globals(asIScriptEngine* e) {
 	NVAL_CONST(ALC_HRTF_REQUIRED_SOFT,            ALC_HRTF_REQUIRED_SOFT);
 	NVAL_CONST(ALC_HRTF_HEADPHONES_DETECTED_SOFT, ALC_HRTF_HEADPHONES_DETECTED_SOFT);
 	NVAL_CONST(ALC_HRTF_UNSUPPORTED_FORMAT_SOFT,  ALC_HRTF_UNSUPPORTED_FORMAT_SOFT);
+	// AL_SOFT_source_spatialize
+	NVAL_CONST(AL_SOURCE_SPATIALIZE_SOFT, AL_SOURCE_SPATIALIZE_SOFT);
+	NVAL_CONST(AL_AUTO_SOFT,             AL_AUTO_SOFT);
 
 	return true;
 }

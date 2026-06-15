@@ -1,0 +1,20 @@
+// al_load.nvgt — decode any audio file to raw PCM for al_buffer.set_data()
+// Uses NVGT's built-in audio_decoder; no plugin required.
+// Handles WAV, Ogg Opus, Ogg Vorbis, FLAC, MP3, and anything audio_decoder supports.
+
+bool al_load(const string& in path, string& out pcm, int& out fmt, int& out sr) {
+    audio_decoder@ dec = audio_decoder();
+    if (!dec.open(path)) return false;
+    fmt = dec.channels == 1 ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16;
+    sr  = int(dec.sample_rate);
+    datastream ds("", "", STREAM_BYTE_ORDER_LITTLE_ENDIAN);
+    ds.binary = true;
+    while (true) {
+        float[] c = dec.read(4096);
+        if (c.length() == 0) break;
+        for (uint i = 0; i < c.length(); i++) { float s = c[i]; if (s > 1.0) s = 1.0; else if (s < -1.0) s = -1.0; ds.write_int16(int16(s * 32767.0)); }
+    }
+    dec.close();
+    pcm = ds.str();
+    return !pcm.empty();
+}

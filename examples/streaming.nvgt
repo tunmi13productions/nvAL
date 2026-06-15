@@ -1,11 +1,10 @@
-// streaming.nvgt - stream audio using buffer queuing
-// Instead of loading the whole file into one buffer, PCM data is split
-// into small chunks and fed to the source continuously. This is how you'd
-// handle large audio files or real-time generated audio.
+// streaming.nvgt - low-level streaming demo using al_source buffer queuing directly.
+// For a higher-level approach, use al_sound.stream() + al_sound.update() from
+// helpers/al_sound.nvgt — it handles decoder, buffer rotation, and looping for you.
 // Space = pause/resume, Escape = quit
 
 #pragma plugin nval
-#include "wav_loader.nvgt"
+#include "../helpers/al_load.nvgt"
 
 const int CHUNK_BYTES = 8192; // bytes per streaming chunk
 const int NUM_BUFFERS = 4;    // buffers in the ring
@@ -32,9 +31,9 @@ void main() {
     ctx.make_current();
 
     // Load entire PCM into memory (in a real app you'd read from disk in chunks)
-    string pcm, err;
+    string pcm;
     int fmt, sr;
-    if (!load_wav("test.wav", pcm, fmt, sr, err)) { alert("Error", err); return; }
+    if (!al_load("test.wav", pcm, fmt, sr)) { alert("Error", "Could not load test.wav."); return; }
 
     al_source@ src = al_source(ctx);
 

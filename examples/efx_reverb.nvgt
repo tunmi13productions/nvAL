@@ -2,7 +2,7 @@
 // R = toggle reverb on/off, Space = pause/resume, Escape = quit
 
 #pragma plugin nval
-#include "wav_loader.nvgt"
+#include "../helpers/al_load.nvgt"
 
 void main() {
     show_window("nvAL - EFX Reverb");
@@ -20,9 +20,9 @@ void main() {
     al_context@ ctx = al_context(dev);
     ctx.make_current();
 
-    string pcm, err;
+    string pcm;
     int fmt, sr;
-    if (!load_wav("test.wav", pcm, fmt, sr, err)) { alert("Error", err); return; }
+    if (!al_load("test.wav", pcm, fmt, sr)) { alert("Error", "Could not load test.wav."); return; }
 
     al_buffer@ buf = al_buffer(ctx);
     buf.set_data(pcm, fmt, sr);
