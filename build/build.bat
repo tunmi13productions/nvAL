@@ -15,6 +15,8 @@ set SRC=%~dp0..\src
 set OUT=%~dp0..\nval.dll
 set INC_NVGT=%NVGT_PATH%\src
 set INC_AS=%NVGT_PATH%\windev\include
+set INC_ASADDON=%NVGT_PATH%\ASAddon\include
+set SCRIPTARRAY=%NVGT_PATH%\ASAddon\plugin\scriptarray.cpp
 
 :: Find MSVC via vswhere
 set VSWHERE="%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -27,7 +29,7 @@ set VCVARS=%VS_PATH%\VC\Auxiliary\Build\vcvars64.bat
 
 echo Building nvAL...
 call "%VCVARS%" > nul 2>&1
-cl /LD /EHsc /std:c++17 /I"%INC_NVGT%" /I"%INC_AS%" /I"%SRC%" "%SRC%\nval.cpp" /link /OUT:"%OUT%"
+cl /LD /EHsc /std:c++17 /I"%INC_NVGT%" /I"%INC_AS%" /I"%INC_ASADDON%" /I"%SRC%" "%SRC%\nval.cpp" "%SCRIPTARRAY%" /link /OUT:"%OUT%"
 if %errorlevel%==0 (
     echo.
     echo Success: nval.dll written to repo root.

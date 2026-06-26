@@ -10,8 +10,11 @@
 
 #include <nvgt_plugin.h>
 #include <cstring>
+#include <cstdlib>
 #include <string>
+#include <vector>
 #include <unordered_map>
+#include <scriptarray.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -546,6 +549,37 @@ public:
 		p_alBufferData(m_id, (ALenum)format, data.c_str(), (ALsizei)data.size(), (ALsizei)sample_rate);
 		return p_alGetError() == AL_NO_ERROR;
 	}
+
+	// Upload float PCM (as returned by NVGT's audio_decoder.read) directly, converting to 16-bit
+	// natively and optionally downmixing stereo->mono so OpenAL can spatialize it. This avoids the
+	// per-sample AngelScript conversion loop, which dominated load time on big maps.
+	bool set_data_floats(CScriptArray* floats, int channels, int sample_rate, bool downmix) {
+		if (!m_id || !floats) return false;
+		unsigned int n = floats->GetSize();
+		if (n == 0 || channels < 1) return false;
+		const float* in = (const float*)floats->GetBuffer();
+		bool mono = downmix && channels == 2;
+		ALenum format = (channels == 1 || mono) ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16;
+		std::vector<short> pcm;
+		if (mono) {
+			pcm.reserve(n / 2);
+			for (unsigned int i = 0; i + 1 < n; i += 2) {
+				float s = (in[i] + in[i + 1]) * 0.5f;
+				if (s > 1.0f) s = 1.0f; else if (s < -1.0f) s = -1.0f;
+				pcm.push_back((short)(s * 32767.0f));
+			}
+		} else {
+			pcm.reserve(n);
+			for (unsigned int i = 0; i < n; i++) {
+				float s = in[i];
+				if (s > 1.0f) s = 1.0f; else if (s < -1.0f) s = -1.0f;
+				pcm.push_back((short)(s * 32767.0f));
+			}
+		}
+		if (pcm.empty()) return false;
+		p_alBufferData(m_id, format, pcm.data(), (ALsizei)(pcm.size() * sizeof(short)), (ALsizei)sample_rate);
+		return p_alGetError() == AL_NO_ERROR;
+	}
 	bool get_is_valid() const { return m_id != 0; }
 	int get_bits()      const { ALint v = 0; if (m_id) p_alGetBufferi(m_id, AL_BITS,      &v); return v; }
 	int get_channels()  const { ALint v = 0; if (m_id) p_alGetBufferi(m_id, AL_CHANNELS,  &v); return v; }
@@ -875,6 +909,7 @@ static bool register_al_buffer(asIScriptEngine* e) {
 	CHECK(e->RegisterObjectBehaviour("al_buffer", asBEHAVE_ADDREF,  "void f()", asMETHOD(al_buffer, add_ref), asCALL_THISCALL));
 	CHECK(e->RegisterObjectBehaviour("al_buffer", asBEHAVE_RELEASE, "void f()", asMETHOD(al_buffer, release), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_buffer", "bool set_data(const string& in, int, int)", asMETHOD(al_buffer, set_data), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_buffer", "bool set_data_floats(array<float>@, int, int, bool)", asMETHOD(al_buffer, set_data_floats), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_buffer", "bool get_is_valid() const property", asMETHOD(al_buffer, get_is_valid), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_buffer", "int get_bits() const property", asMETHOD(al_buffer, get_bits), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_buffer", "int get_channels() const property", asMETHOD(al_buffer, get_channels), asCALL_THISCALL));
@@ -1129,6 +1164,7 @@ static bool register_globals(asIScriptEngine* e) {
 plugin_main(nvgt_plugin_shared* shared) {
 	if (!prepare_plugin(shared)) return false;
 	asIScriptEngine* e = shared->script_engine;
+	CScriptArray::SetMemoryFunctions(std::malloc, std::free); // for CScriptArray used by set_data_floats
 
 	load_openal("");
 	nvgt_bundle_shared_library("openal32");
