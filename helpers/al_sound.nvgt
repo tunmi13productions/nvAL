@@ -28,6 +28,7 @@ class al_sound {
     float  _pan;
     bool   _looping;
     bool   _spatialization;
+    bool   _direct;        // true => route straight to output (AL_SOFT_direct_channels): no panner, no HRTF
     bool   _autoclose;
     bool   _was_playing;   // true after play(); cleared by stop() / close()
 
@@ -56,6 +57,7 @@ class al_sound {
         _pan             = 0.0;
         _looping         = false;
         _spatialization  = false;
+        _direct          = false;
         _autoclose       = false;
         _was_playing     = false;
         _buf_sample_rate = 0;
@@ -359,20 +361,45 @@ class al_sound {
 
     void set_spatialization_enabled(bool en) property {
         _spatialization = en;
-        if (@_src == null) return;
-        _src.source_relative = !en;
-        // Uncomment after rebuilding nval with AL_SOFT_source_spatialize support:
-        // Forces stereo sources to mono when in 3D space; reverts to default otherwise.
-        _src.spatialize = en ? 1 : 2;  // 1=AL_TRUE, 2=AL_AUTO_SOFT
-        if (!en)
-            _apply_pan();    // restore pan-based position
-        else
-            _src.set_position(0.0, 0.0, 0.0);
+        if (en) _direct = false;   // spatialized and direct are mutually exclusive
+        _apply_spatial_state();
     }
     bool get_spatialization_enabled() const property { return _spatialization; }
 
-    void set_position_3d(float x, float y, float z)   { if (@_src != null) _src.set_position(x, y, z); }
-    void set_position_3d(const vector& in pos)         { if (@_src != null) _src.set_position(pos.x, pos.y, pos.z); }
+    // Direct mode: route the source straight to the device output (AL_SOFT_direct_channels) so it
+    // skips OpenAL's 3D panner AND HRTF entirely — for dry, non-positional sounds (UI, music, server
+    // chimes). The HRTF bypass is direct_channels, NOT spatialize (spatialize=0 alone does NOT bypass
+    // HRTF for stereo sources). A direct source can't be positioned or panned; positioning is ignored.
+    void set_direct(bool en) property {
+        _direct = en;
+        if (en) _spatialization = false;   // mutually exclusive with spatialization
+        _apply_spatial_state();
+    }
+    bool get_direct() const property { return _direct; }
+
+    // Single source of truth for how the live source pans/spatialises. Both setters route through
+    // here (and it is safe to call after the source is recreated), so the _direct / _spatialization
+    // flags can never drift out of sync with the actual OpenAL source state.
+    private void _apply_spatial_state() {
+        if (@_src == null) return;
+        if (_direct) {
+            _src.direct_channels = true;   // straight to output: no panner, no HRTF
+            _src.spatialize      = 0;      // AL_FALSE: never run the 3D panner
+            _src.source_relative = true;   // fixed at the listener
+            _src.set_position(0.0, 0.0, 0.0);
+        } else {
+            _src.direct_channels = false;
+            // AL_SOFT_source_spatialize: TRUE in 3D (OpenAL downmixes a stereo source to a positioned
+            // mono point); AUTO otherwise so stationary / at-listener stereo keeps its full image.
+            _src.spatialize      = _spatialization ? 1 : 2;  // 1=AL_TRUE, 2=AL_AUTO_SOFT
+            _src.source_relative = !_spatialization;
+            if (_spatialization) _src.set_position(0.0, 0.0, 0.0);
+            else _apply_pan();
+        }
+    }
+
+    void set_position_3d(float x, float y, float z)   { if (@_src != null && !_direct) _src.set_position(x, y, z); }
+    void set_position_3d(const vector& in pos)         { if (@_src != null && !_direct) _src.set_position(pos.x, pos.y, pos.z); }
     vector get_position_3d() const {
         vector v;
         if (@_src != null) { v.x = _src.x; v.y = _src.y; v.z = _src.z; }
@@ -513,6 +540,7 @@ class al_sound {
     }
 
     void _apply_pan() {
+        if (_direct) return;   // direct sources are non-positional — never pan them
         // Equal-power panning: place source in the horizontal plane around the listener.
         // pan = -1 → full left (−90°), 0 → centre, 1 → full right (+90°)
         // Y-forward, Z-up orientation: pan circle lies in the XY plane.
