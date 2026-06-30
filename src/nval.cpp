@@ -49,9 +49,17 @@ typedef void (AL_APIENTRY *LPALAUXILIARYEFFECTSLOTI)(ALuint, ALenum, ALint);
 typedef void (AL_APIENTRY *LPALAUXILIARYEFFECTSLOTF)(ALuint, ALenum, ALfloat);
 typedef void (AL_APIENTRY *LPALGETAUXILIARYEFFECTSLOTI)(ALuint, ALenum, ALint*);
 typedef void (AL_APIENTRY *LPALGETAUXILIARYEFFECTSLOTF)(ALuint, ALenum, ALfloat*);
+typedef void (AL_APIENTRY *LPALEFFECTFV)(ALuint, ALenum, const ALfloat*);
+typedef void (AL_APIENTRY *LPALGETEFFECTFV)(ALuint, ALenum, ALfloat*);
 // LPALSOURCE3I, LPALCCAPTURE*, LPALCGETINTEGERV already defined in al.h / alc.h
 typedef ALCboolean     (ALC_APIENTRY *LPALCRESETDEVICESOFT)(ALCdevice*, const ALCint*);
 typedef const ALCchar* (ALC_APIENTRY *LPALCGETSTRINGISOFT)(ALCdevice*, ALCenum, ALCsizei);
+// AL_SOFT_source_resampler resampler-name query (AL, not ALC)
+typedef const ALchar*  (AL_APIENTRY  *LPALGETSTRINGI_SOFT)(ALenum, ALsizei);
+// ALC_SOFT_reopen_device / ALC_SOFT_pause_device (live device switch + pause)
+typedef ALCboolean     (ALC_APIENTRY *LPALCREOPENDEVICESOFT)(ALCdevice*, const ALCchar*, const ALCint*);
+typedef void           (ALC_APIENTRY *LPALCDEVICEPAUSESOFT)(ALCdevice*);
+typedef void           (ALC_APIENTRY *LPALCDEVICERESUMESOFT)(ALCdevice*);
 
 // ============================================================
 // EFX constants
@@ -59,6 +67,9 @@ typedef const ALCchar* (ALC_APIENTRY *LPALCGETSTRINGISOFT)(ALCdevice*, ALCenum, 
 
 #define AL_SOURCE_SPATIALIZE_SOFT            0x1214
 #define AL_AUTO_SOFT                         0x0002
+// AL_SOFT_direct_channels: route a source's channels straight to the device output, bypassing the
+// virtualizer (panning/HRTF). This is the reliable way to keep a dry sound free of HRTF coloration.
+#define AL_DIRECT_CHANNELS_SOFT              0x1033
 
 #define AL_DIRECT_FILTER                     0x20005
 #define AL_AUXILIARY_SEND_FILTER             0x20006
@@ -133,6 +144,79 @@ typedef const ALCchar* (ALC_APIENTRY *LPALCGETSTRINGISOFT)(ALCdevice*, ALCenum, 
 #define AL_EFFECTSLOT_AUXILIARY_SEND_AUTO    0x0003
 #define ALC_MAX_AUXILIARY_SENDS              0x20003
 
+// EFX per-source / per-listener properties
+#define AL_METERS_PER_UNIT                   0x20004
+#define AL_AIR_ABSORPTION_FACTOR             0x20007
+#define AL_ROOM_ROLLOFF_FACTOR               0x20008
+#define AL_CONE_OUTER_GAINHF                 0x20009
+
+// Additional effect types (the rest of the EFX standard set)
+#define AL_EFFECT_FREQUENCY_SHIFTER          0x0006
+#define AL_EFFECT_VOCAL_MORPHER              0x0007
+#define AL_EFFECT_AUTOWAH                    0x000A
+
+// EAXReverb params (the full reverb model; the standard reverb is a subset)
+#define AL_EAXREVERB_DENSITY                 0x0001
+#define AL_EAXREVERB_DIFFUSION               0x0002
+#define AL_EAXREVERB_GAIN                    0x0003
+#define AL_EAXREVERB_GAINHF                  0x0004
+#define AL_EAXREVERB_GAINLF                  0x0005
+#define AL_EAXREVERB_DECAY_TIME              0x0006
+#define AL_EAXREVERB_DECAY_HFRATIO           0x0007
+#define AL_EAXREVERB_DECAY_LFRATIO           0x0008
+#define AL_EAXREVERB_REFLECTIONS_GAIN        0x0009
+#define AL_EAXREVERB_REFLECTIONS_DELAY       0x000A
+#define AL_EAXREVERB_REFLECTIONS_PAN         0x000B
+#define AL_EAXREVERB_LATE_REVERB_GAIN        0x000C
+#define AL_EAXREVERB_LATE_REVERB_DELAY       0x000D
+#define AL_EAXREVERB_LATE_REVERB_PAN         0x000E
+#define AL_EAXREVERB_ECHO_TIME               0x000F
+#define AL_EAXREVERB_ECHO_DEPTH              0x0010
+#define AL_EAXREVERB_MODULATION_TIME         0x0011
+#define AL_EAXREVERB_MODULATION_DEPTH        0x0012
+#define AL_EAXREVERB_AIR_ABSORPTION_GAINHF   0x0013
+#define AL_EAXREVERB_HFREFERENCE             0x0014
+#define AL_EAXREVERB_LFREFERENCE             0x0015
+#define AL_EAXREVERB_ROOM_ROLLOFF_FACTOR     0x0016
+#define AL_EAXREVERB_DECAY_HFLIMIT           0x0017
+// Distortion params
+#define AL_DISTORTION_EDGE                   0x0001
+#define AL_DISTORTION_GAIN                   0x0002
+#define AL_DISTORTION_LOWPASS_CUTOFF         0x0003
+#define AL_DISTORTION_EQCENTER               0x0004
+#define AL_DISTORTION_EQBANDWIDTH            0x0005
+// Ring modulator params
+#define AL_RING_MODULATOR_FREQUENCY          0x0001
+#define AL_RING_MODULATOR_HIGHPASS_CUTOFF    0x0002
+#define AL_RING_MODULATOR_WAVEFORM           0x0003
+// Pitch shifter params
+#define AL_PITCH_SHIFTER_COARSE_TUNE         0x0001
+#define AL_PITCH_SHIFTER_FINE_TUNE           0x0002
+// Autowah params
+#define AL_AUTOWAH_ATTACK_TIME               0x0001
+#define AL_AUTOWAH_RELEASE_TIME              0x0002
+#define AL_AUTOWAH_RESONANCE                 0x0003
+#define AL_AUTOWAH_PEAK_GAIN                 0x0004
+// Frequency shifter params
+#define AL_FREQUENCY_SHIFTER_FREQUENCY       0x0001
+#define AL_FREQUENCY_SHIFTER_LEFT_DIRECTION  0x0002
+#define AL_FREQUENCY_SHIFTER_RIGHT_DIRECTION 0x0003
+// Vocal morpher params
+#define AL_VOCAL_MORPHER_PHONEMEA            0x0001
+#define AL_VOCAL_MORPHER_PHONEMEA_COARSE_TUNING 0x0002
+#define AL_VOCAL_MORPHER_PHONEMEB            0x0003
+#define AL_VOCAL_MORPHER_PHONEMEB_COARSE_TUNING 0x0004
+#define AL_VOCAL_MORPHER_WAVEFORM            0x0005
+#define AL_VOCAL_MORPHER_RATE                0x0006
+
+// AL_SOFT_source_resampler
+#define AL_NUM_RESAMPLERS_SOFT               0x1210
+#define AL_DEFAULT_RESAMPLER_SOFT            0x1211
+#define AL_SOURCE_RESAMPLER_SOFT             0x1212
+#define AL_RESAMPLER_NAME_SOFT               0x1213
+// AL_SOFT_loop_points
+#define AL_LOOP_POINTS_SOFT                  0x2015
+
 // HRTF constants
 #define ALC_HRTF_SOFT                        0x1992
 #define ALC_HRTF_STATUS_SOFT                 0x1993
@@ -198,6 +282,9 @@ static ALboolean (AL_APIENTRY *p_alIsExtensionPresent)(const ALchar*) = nullptr;
 static void     (AL_APIENTRY *p_alDopplerFactor)(ALfloat) = nullptr;
 static void     (AL_APIENTRY *p_alSpeedOfSound)(ALfloat) = nullptr;
 static void     (AL_APIENTRY *p_alDistanceModel)(ALenum) = nullptr;
+static ALint    (AL_APIENTRY *p_alGetInteger)(ALenum) = nullptr;
+static ALfloat  (AL_APIENTRY *p_alGetFloat)(ALenum) = nullptr;
+static void     (AL_APIENTRY *p_alBufferiv)(ALuint, ALenum, const ALint*) = nullptr;
 
 // Core ALC
 static ALCdevice*   (ALC_APIENTRY *p_alcOpenDevice)(const ALCchar*) = nullptr;
@@ -233,6 +320,8 @@ static LPALAUXILIARYEFFECTSLOTF     p_alAuxiliaryEffectSlotf = nullptr;
 static LPALGETAUXILIARYEFFECTSLOTI  p_alGetAuxiliaryEffectSloti = nullptr;
 static LPALGETAUXILIARYEFFECTSLOTF  p_alGetAuxiliaryEffectSlotf = nullptr;
 static LPALSOURCE3I                 p_alSource3i = nullptr;
+static LPALEFFECTFV                 p_alEffectfv = nullptr;
+static LPALGETEFFECTFV              p_alGetEffectfv = nullptr;
 static bool g_efx_loaded = false;
 
 // Capture (standard ALC 1.1, loaded from DLL directly)
@@ -246,6 +335,13 @@ static bool g_capture_loaded = false;
 // HRTF (ALC_SOFT_HRTF extension, loaded per-device)
 static LPALCRESETDEVICESOFT p_alcResetDeviceSOFT = nullptr;
 static LPALCGETSTRINGISOFT  p_alcGetStringiSOFT  = nullptr;
+
+// AL_SOFT_source_resampler name query (loaded from DLL if exported)
+static LPALGETSTRINGI_SOFT  p_alGetStringiSOFT   = nullptr;
+// ALC_SOFT_reopen_device / ALC_SOFT_pause_device (loaded per-device)
+static LPALCREOPENDEVICESOFT p_alcReopenDeviceSOFT = nullptr;
+static LPALCDEVICEPAUSESOFT  p_alcDevicePauseSOFT  = nullptr;
+static LPALCDEVICERESUMESOFT p_alcDeviceResumeSOFT = nullptr;
 
 static bool g_al_loaded = false;
 
@@ -272,6 +368,7 @@ static bool load_openal(const std::string& path) {
 	LOAD(alGetListenerf) LOAD(alGetListener3f) LOAD(alGetListenerfv)
 	LOAD(alGetError) LOAD(alGetString) LOAD(alIsExtensionPresent)
 	LOAD(alDopplerFactor) LOAD(alSpeedOfSound) LOAD(alDistanceModel)
+	LOAD(alGetInteger) LOAD(alGetFloat) LOAD(alBufferiv)
 	LOAD(alcOpenDevice) LOAD(alcCloseDevice)
 	LOAD(alcCreateContext) LOAD(alcMakeContextCurrent) LOAD(alcDestroyContext)
 	LOAD(alcGetCurrentContext) LOAD(alcGetContextsDevice)
@@ -283,6 +380,8 @@ static bool load_openal(const std::string& path) {
 	#define LOADOPT(fn) p_##fn = (decltype(p_##fn))al_load_sym(#fn);
 	LOADOPT(alcCaptureOpenDevice) LOADOPT(alcCaptureCloseDevice)
 	LOADOPT(alcCaptureStart) LOADOPT(alcCaptureStop) LOADOPT(alcCaptureSamples)
+	// AL_SOFT_source_resampler name query is exported directly by OpenAL Soft (optional)
+	LOADOPT(alGetStringiSOFT)
 	#undef LOADOPT
 	g_capture_loaded = p_alcCaptureOpenDevice && p_alcCaptureCloseDevice &&
 	                   p_alcCaptureStart && p_alcCaptureStop && p_alcCaptureSamples;
@@ -303,7 +402,7 @@ static bool try_load_efx(ALCdevice* dev) {
 	LEFX(alGenAuxiliaryEffectSlots) LEFX(alDeleteAuxiliaryEffectSlots)
 	LEFX(alAuxiliaryEffectSloti) LEFX(alAuxiliaryEffectSlotf)
 	LEFX(alGetAuxiliaryEffectSloti) LEFX(alGetAuxiliaryEffectSlotf)
-	LEFX(alSource3i)
+	LEFX(alSource3i) LEFX(alEffectfv) LEFX(alGetEffectfv)
 	#undef LEFX
 	g_efx_loaded = true;
 	return true;
@@ -314,6 +413,16 @@ static void try_load_hrtf(ALCdevice* dev) {
 	if (p_alcIsExtensionPresent(dev, "ALC_SOFT_HRTF") != ALC_TRUE) return;
 	p_alcResetDeviceSOFT = (LPALCRESETDEVICESOFT)p_alcGetProcAddress(dev, "alcResetDeviceSOFT");
 	p_alcGetStringiSOFT  = (LPALCGETSTRINGISOFT) p_alcGetProcAddress(dev, "alcGetStringiSOFT");
+}
+
+static void try_load_device_exts(ALCdevice* dev) {
+	if (!p_alcGetProcAddress || !p_alcIsExtensionPresent) return;
+	if (p_alcIsExtensionPresent(dev, "ALC_SOFT_reopen_device") == ALC_TRUE)
+		p_alcReopenDeviceSOFT = (LPALCREOPENDEVICESOFT)p_alcGetProcAddress(dev, "alcReopenDeviceSOFT");
+	if (p_alcIsExtensionPresent(dev, "ALC_SOFT_pause_device") == ALC_TRUE) {
+		p_alcDevicePauseSOFT  = (LPALCDEVICEPAUSESOFT) p_alcGetProcAddress(dev, "alcDevicePauseSOFT");
+		p_alcDeviceResumeSOFT = (LPALCDEVICERESUMESOFT)p_alcGetProcAddress(dev, "alcDeviceResumeSOFT");
+	}
 }
 
 // ============================================================
@@ -368,6 +477,15 @@ public:
 	float get_f(int param) const { float v = 0; if (m_id) p_alGetEffectf(m_id, (ALenum)param, &v); return v; }
 	void set_i(int param, int v) { if (m_id) p_alEffecti(m_id, (ALenum)param, v); }
 	int  get_i(int param) const { ALint v = 0; if (m_id) p_alGetEffecti(m_id, (ALenum)param, &v); return v; }
+	// Vector params (EAXReverb reflections/late-reverb pan are 3-component float vectors).
+	void set_vector(int param, float x, float y, float z) {
+		if (m_id && p_alEffectfv) { ALfloat v[3] = { x, y, z }; p_alEffectfv(m_id, (ALenum)param, v); }
+	}
+	void get_vector(int param, float& x, float& y, float& z) const {
+		ALfloat v[3] = { 0, 0, 0 };
+		if (m_id && p_alGetEffectfv) p_alGetEffectfv(m_id, (ALenum)param, v);
+		x = v[0]; y = v[1]; z = v[2];
+	}
 	~al_effect() override { if (m_id) p_alDeleteEffects(1, &m_id); }
 };
 
@@ -426,6 +544,7 @@ public:
 		if (!m_dev) return false;
 		try_load_efx(m_dev);
 		try_load_hrtf(m_dev);
+		try_load_device_exts(m_dev);
 		return true;
 	}
 	bool open_named(const std::string& name) { m_name = name; return open(); }
@@ -477,6 +596,20 @@ public:
 		return p_alcResetDeviceSOFT(m_dev, attrs) == ALC_TRUE;
 	}
 
+	// ALC_SOFT_reopen_device: switch the underlying output device WITHOUT tearing down contexts,
+	// buffers or sources — the fix for "device selection" pain (no full reinit on output change).
+	bool get_can_reopen() const { return p_alcReopenDeviceSOFT != nullptr; }
+	bool reopen(const std::string& name) {
+		if (!m_dev || !p_alcReopenDeviceSOFT) return false;
+		bool ok = p_alcReopenDeviceSOFT(m_dev, name.empty() ? nullptr : name.c_str(), nullptr) == ALC_TRUE;
+		if (ok) m_name = name;
+		return ok;
+	}
+	// ALC_SOFT_pause_device: halt/resume all processing on the device (e.g. app backgrounded).
+	bool get_can_pause() const { return p_alcDevicePauseSOFT != nullptr; }
+	void pause()  { if (m_dev && p_alcDevicePauseSOFT)  p_alcDevicePauseSOFT(m_dev); }
+	void resume() { if (m_dev && p_alcDeviceResumeSOFT) p_alcDeviceResumeSOFT(m_dev); }
+
 	~al_device() override { close(); }
 };
 
@@ -518,9 +651,15 @@ public:
 	void set_listener_orientation(float fx, float fy, float fz, float ux, float uy, float uz) {
 		float d[6] = {fx, fy, fz, ux, uy, uz}; p_alListenerfv(AL_ORIENTATION, d);
 	}
-	void set_doppler_factor(float v) { p_alDopplerFactor(v); }
-	void set_speed_of_sound(float v) { p_alSpeedOfSound(v); }
-	void set_distance_model(int m) { p_alDistanceModel((ALenum)m); }
+	void  set_doppler_factor(float v) { p_alDopplerFactor(v); }
+	float get_doppler_factor() const  { return p_alGetFloat ? p_alGetFloat(AL_DOPPLER_FACTOR) : 1.0f; }
+	void  set_speed_of_sound(float v) { p_alSpeedOfSound(v); }
+	float get_speed_of_sound() const  { return p_alGetFloat ? p_alGetFloat(AL_SPEED_OF_SOUND) : 343.3f; }
+	void  set_distance_model(int m) { p_alDistanceModel((ALenum)m); }
+	int   get_distance_model() const { return p_alGetInteger ? (int)p_alGetInteger(AL_DISTANCE_MODEL) : 0; }
+	// EFX listener scale: how many world units make one meter (drives air absorption / reverb scale).
+	void  set_meters_per_unit(float v) { if (g_efx_loaded) p_alListenerf(AL_METERS_PER_UNIT, v); }
+	float get_meters_per_unit() const  { float v = 1.0f; if (g_efx_loaded) p_alGetListenerf(AL_METERS_PER_UNIT, &v); return v; }
 	int  get_al_error() const { return (int)p_alGetError(); }
 	bool is_extension_present(const std::string& ext) const { return p_alIsExtensionPresent(ext.c_str()) == AL_TRUE; }
 
@@ -578,6 +717,14 @@ public:
 		}
 		if (pcm.empty()) return false;
 		p_alBufferData(m_id, format, pcm.data(), (ALsizei)(pcm.size() * sizeof(short)), (ALsizei)sample_rate);
+		return p_alGetError() == AL_NO_ERROR;
+	}
+	// AL_SOFT_loop_points: set the sample range a looping source replays (seamless sub-buffer loops),
+	// instead of script-managed re-queueing. start/end are sample-frame offsets into this buffer.
+	bool set_loop_points(int start, int end) {
+		if (!m_id || !p_alBufferiv) return false;
+		ALint pts[2] = { (ALint)start, (ALint)end };
+		p_alBufferiv(m_id, AL_LOOP_POINTS_SOFT, pts);
 		return p_alGetError() == AL_NO_ERROR;
 	}
 	bool get_is_valid() const { return m_id != 0; }
@@ -664,6 +811,8 @@ public:
 	float get_sec_offset()     const { float v = 0; if (m_id) p_alGetSourcef(m_id, AL_SEC_OFFSET,    &v); return v; }
 	void  set_sample_offset(float v) { if (m_id) p_alSourcef(m_id, AL_SAMPLE_OFFSET, v); }
 	float get_sample_offset()  const { float v = 0; if (m_id) p_alGetSourcef(m_id, AL_SAMPLE_OFFSET, &v); return v; }
+	void  set_byte_offset(float v)   { if (m_id) p_alSourcef(m_id, AL_BYTE_OFFSET,   v); }
+	float get_byte_offset()    const { float v = 0; if (m_id) p_alGetSourcef(m_id, AL_BYTE_OFFSET,   &v); return v; }
 
 	// 3D position
 	void set_position(float x, float y, float z) { if (m_id) p_alSource3f(m_id, AL_POSITION, x, y, z); }
@@ -709,6 +858,22 @@ public:
 	// AL_SOFT_source_spatialize: AL_FALSE=never, AL_TRUE=always force mono, AL_AUTO_SOFT=default
 	void set_spatialize(int v)  { if (m_id) p_alSourcei(m_id, AL_SOURCE_SPATIALIZE_SOFT, (ALint)v); }
 	int  get_spatialize() const { ALint v = AL_AUTO_SOFT; if (m_id) p_alGetSourcei(m_id, AL_SOURCE_SPATIALIZE_SOFT, &v); return (int)v; }
+
+	// AL_SOFT_direct_channels: true routes channels straight to output, bypassing panning/HRTF.
+	void set_direct_channels(bool v)  { if (m_id) p_alSourcei(m_id, AL_DIRECT_CHANNELS_SOFT, v ? AL_TRUE : AL_FALSE); }
+	bool get_direct_channels() const  { ALint v = AL_FALSE; if (m_id) p_alGetSourcei(m_id, AL_DIRECT_CHANNELS_SOFT, &v); return v == AL_TRUE; }
+
+	// AL_SOFT_source_resampler: per-source resampler index (see nval_get_resampler_name()).
+	void set_resampler(int v) { if (m_id) p_alSourcei(m_id, AL_SOURCE_RESAMPLER_SOFT, (ALint)v); }
+	int  get_resampler() const { ALint v = 0; if (m_id) p_alGetSourcei(m_id, AL_SOURCE_RESAMPLER_SOFT, &v); return (int)v; }
+
+	// EFX per-source properties (no-ops unless EFX is loaded)
+	void  set_air_absorption_factor(float v) { if (m_id && g_efx_loaded) p_alSourcef(m_id, AL_AIR_ABSORPTION_FACTOR, v); }
+	float get_air_absorption_factor() const  { float v = 0.0f; if (m_id && g_efx_loaded) p_alGetSourcef(m_id, AL_AIR_ABSORPTION_FACTOR, &v); return v; }
+	void  set_room_rolloff_factor(float v)   { if (m_id && g_efx_loaded) p_alSourcef(m_id, AL_ROOM_ROLLOFF_FACTOR, v); }
+	float get_room_rolloff_factor() const    { float v = 0.0f; if (m_id && g_efx_loaded) p_alGetSourcef(m_id, AL_ROOM_ROLLOFF_FACTOR, &v); return v; }
+	void  set_cone_outer_gainhf(float v)     { if (m_id && g_efx_loaded) p_alSourcef(m_id, AL_CONE_OUTER_GAINHF, v); }
+	float get_cone_outer_gainhf() const      { float v = 1.0f; if (m_id && g_efx_loaded) p_alGetSourcef(m_id, AL_CONE_OUTER_GAINHF, &v); return v; }
 
 	// EFX — direct filter
 	void set_direct_filter(al_filter* flt) {
@@ -837,6 +1002,16 @@ static std::string nval_get_al_error_string(int err) {
 		default:                   return "AL_UNKNOWN_ERROR";
 	}
 }
+// AL_SOFT_source_resampler enumeration (requires a current context). Index a resampler with
+// al_source.resampler; discover names/count/default here.
+static bool nval_resampler_available() { return p_alGetStringiSOFT != nullptr && p_alGetInteger != nullptr; }
+static int  nval_get_num_resamplers() { return p_alGetInteger ? (int)p_alGetInteger(AL_NUM_RESAMPLERS_SOFT) : 0; }
+static int  nval_get_default_resampler() { return p_alGetInteger ? (int)p_alGetInteger(AL_DEFAULT_RESAMPLER_SOFT) : 0; }
+static std::string nval_get_resampler_name(int index) {
+	if (!p_alGetStringiSOFT) return "";
+	const ALchar* s = p_alGetStringiSOFT(AL_RESAMPLER_NAME_SOFT, (ALsizei)index);
+	return s ? s : "";
+}
 static std::string nval_get_version_string()  { if (!g_al_loaded) return ""; const ALchar* s=p_alGetString(AL_VERSION);  return s?s:""; }
 static std::string nval_get_renderer_string() { if (!g_al_loaded) return ""; const ALchar* s=p_alGetString(AL_RENDERER); return s?s:""; }
 static std::string nval_get_vendor_string()   { if (!g_al_loaded) return ""; const ALchar* s=p_alGetString(AL_VENDOR);   return s?s:""; }
@@ -869,6 +1044,11 @@ static bool register_al_device(asIScriptEngine* e) {
 	CHECK(e->RegisterObjectMethod("al_device", "int get_hrtf_status() const property", asMETHOD(al_device, get_hrtf_status), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_device", "bool enable_hrtf(int)", asMETHOD(al_device, enable_hrtf), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_device", "bool disable_hrtf()", asMETHOD(al_device, disable_hrtf), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_device", "bool get_can_reopen() const property", asMETHOD(al_device, get_can_reopen), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_device", "bool reopen(const string& in = \"\")", asMETHOD(al_device, reopen), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_device", "bool get_can_pause() const property", asMETHOD(al_device, get_can_pause), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_device", "void pause()", asMETHOD(al_device, pause), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_device", "void resume()", asMETHOD(al_device, resume), asCALL_THISCALL));
 	return true;
 }
 
@@ -896,8 +1076,13 @@ static bool register_al_context(asIScriptEngine* e) {
 	CHECK(e->RegisterObjectMethod("al_context", "float get_listener_gain() const property", asMETHOD(al_context, get_listener_gain), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_context", "void set_listener_orientation(float, float, float, float, float, float)", asMETHOD(al_context, set_listener_orientation), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_context", "void set_doppler_factor(float)", asMETHOD(al_context, set_doppler_factor), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_context", "float get_doppler_factor() const", asMETHOD(al_context, get_doppler_factor), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_context", "void set_speed_of_sound(float)", asMETHOD(al_context, set_speed_of_sound), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_context", "float get_speed_of_sound() const", asMETHOD(al_context, get_speed_of_sound), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_context", "void set_distance_model(int)", asMETHOD(al_context, set_distance_model), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_context", "int get_distance_model() const", asMETHOD(al_context, get_distance_model), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_context", "void set_meters_per_unit(float) property", asMETHOD(al_context, set_meters_per_unit), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_context", "float get_meters_per_unit() const property", asMETHOD(al_context, get_meters_per_unit), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_context", "int get_al_error() const", asMETHOD(al_context, get_al_error), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_context", "bool is_extension_present(const string& in) const", asMETHOD(al_context, is_extension_present), asCALL_THISCALL));
 	return true;
@@ -910,6 +1095,7 @@ static bool register_al_buffer(asIScriptEngine* e) {
 	CHECK(e->RegisterObjectBehaviour("al_buffer", asBEHAVE_RELEASE, "void f()", asMETHOD(al_buffer, release), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_buffer", "bool set_data(const string& in, int, int)", asMETHOD(al_buffer, set_data), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_buffer", "bool set_data_floats(array<float>@, int, int, bool)", asMETHOD(al_buffer, set_data_floats), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_buffer", "bool set_loop_points(int, int)", asMETHOD(al_buffer, set_loop_points), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_buffer", "bool get_is_valid() const property", asMETHOD(al_buffer, get_is_valid), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_buffer", "int get_bits() const property", asMETHOD(al_buffer, get_bits), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_buffer", "int get_channels() const property", asMETHOD(al_buffer, get_channels), asCALL_THISCALL));
@@ -945,6 +1131,8 @@ static bool register_al_effect(asIScriptEngine* e) {
 	CHECK(e->RegisterObjectMethod("al_effect", "float get_f(int) const", asMETHOD(al_effect, get_f), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_effect", "void set_i(int, int)", asMETHOD(al_effect, set_i), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_effect", "int get_i(int) const", asMETHOD(al_effect, get_i), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_effect", "void set_vector(int, float, float, float)", asMETHOD(al_effect, set_vector), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_effect", "void get_vector(int, float& out, float& out, float& out) const", asMETHOD(al_effect, get_vector), asCALL_THISCALL));
 	return true;
 }
 
@@ -996,6 +1184,8 @@ static bool register_al_source(asIScriptEngine* e) {
 	CHECK(e->RegisterObjectMethod("al_source", "float get_sec_offset() const property", asMETHOD(al_source, get_sec_offset), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_source", "void set_sample_offset(float) property", asMETHOD(al_source, set_sample_offset), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_source", "float get_sample_offset() const property", asMETHOD(al_source, get_sample_offset), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_source", "void set_byte_offset(float) property", asMETHOD(al_source, set_byte_offset), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_source", "float get_byte_offset() const property", asMETHOD(al_source, get_byte_offset), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_source", "void set_position(float, float, float)", asMETHOD(al_source, set_position), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_source", "void set_x(float) property", asMETHOD(al_source, set_x), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_source", "float get_x() const property", asMETHOD(al_source, get_x), asCALL_THISCALL));
@@ -1027,6 +1217,16 @@ static bool register_al_source(asIScriptEngine* e) {
 	CHECK(e->RegisterObjectMethod("al_source", "bool get_source_relative() const property", asMETHOD(al_source, get_source_relative), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_source", "void set_spatialize(int) property", asMETHOD(al_source, set_spatialize), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_source", "int get_spatialize() const property", asMETHOD(al_source, get_spatialize), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_source", "void set_direct_channels(bool) property", asMETHOD(al_source, set_direct_channels), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_source", "bool get_direct_channels() const property", asMETHOD(al_source, get_direct_channels), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_source", "void set_resampler(int) property", asMETHOD(al_source, set_resampler), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_source", "int get_resampler() const property", asMETHOD(al_source, get_resampler), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_source", "void set_air_absorption_factor(float) property", asMETHOD(al_source, set_air_absorption_factor), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_source", "float get_air_absorption_factor() const property", asMETHOD(al_source, get_air_absorption_factor), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_source", "void set_room_rolloff_factor(float) property", asMETHOD(al_source, set_room_rolloff_factor), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_source", "float get_room_rolloff_factor() const property", asMETHOD(al_source, get_room_rolloff_factor), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_source", "void set_cone_outer_gainhf(float) property", asMETHOD(al_source, set_cone_outer_gainhf), asCALL_THISCALL));
+	CHECK(e->RegisterObjectMethod("al_source", "float get_cone_outer_gainhf() const property", asMETHOD(al_source, get_cone_outer_gainhf), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_source", "void set_direct_filter(al_filter@)", asMETHOD(al_source, set_direct_filter), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_source", "void set_aux_send(int, al_aux_slot@, al_filter@)", asMETHOD(al_source, set_aux_send), asCALL_THISCALL));
 	CHECK(e->RegisterObjectMethod("al_source", "bool get_efx_available() const property", asMETHOD(al_source, get_efx_available), asCALL_THISCALL));
@@ -1061,6 +1261,10 @@ static bool register_globals(asIScriptEngine* e) {
 	CHECK(e->RegisterGlobalFunction("string nval_get_version()", asFUNCTION(nval_get_version_string), asCALL_CDECL));
 	CHECK(e->RegisterGlobalFunction("string nval_get_renderer()", asFUNCTION(nval_get_renderer_string), asCALL_CDECL));
 	CHECK(e->RegisterGlobalFunction("string nval_get_vendor()", asFUNCTION(nval_get_vendor_string), asCALL_CDECL));
+	CHECK(e->RegisterGlobalFunction("bool nval_resampler_available()", asFUNCTION(nval_resampler_available), asCALL_CDECL));
+	CHECK(e->RegisterGlobalFunction("int nval_get_num_resamplers()", asFUNCTION(nval_get_num_resamplers), asCALL_CDECL));
+	CHECK(e->RegisterGlobalFunction("int nval_get_default_resampler()", asFUNCTION(nval_get_default_resampler), asCALL_CDECL));
+	CHECK(e->RegisterGlobalFunction("string nval_get_resampler_name(int)", asFUNCTION(nval_get_resampler_name), asCALL_CDECL));
 
 	// Buffer formats
 	NVAL_CONST(AL_FORMAT_MONO8,    AL_FORMAT_MONO8);
@@ -1150,6 +1354,86 @@ static bool register_globals(asIScriptEngine* e) {
 	NVAL_CONST(ALC_HRTF_REQUIRED_SOFT,            ALC_HRTF_REQUIRED_SOFT);
 	NVAL_CONST(ALC_HRTF_HEADPHONES_DETECTED_SOFT, ALC_HRTF_HEADPHONES_DETECTED_SOFT);
 	NVAL_CONST(ALC_HRTF_UNSUPPORTED_FORMAT_SOFT,  ALC_HRTF_UNSUPPORTED_FORMAT_SOFT);
+	// Additional effect types (RING_MODULATOR was defined but never registered before)
+	NVAL_CONST(AL_EFFECT_RING_MODULATOR,   AL_EFFECT_RING_MODULATOR);
+	NVAL_CONST(AL_EFFECT_FREQUENCY_SHIFTER,AL_EFFECT_FREQUENCY_SHIFTER);
+	NVAL_CONST(AL_EFFECT_VOCAL_MORPHER,    AL_EFFECT_VOCAL_MORPHER);
+	NVAL_CONST(AL_EFFECT_AUTOWAH,          AL_EFFECT_AUTOWAH);
+	// EFX per-source / per-listener properties
+	NVAL_CONST(AL_AIR_ABSORPTION_FACTOR, AL_AIR_ABSORPTION_FACTOR);
+	NVAL_CONST(AL_ROOM_ROLLOFF_FACTOR,   AL_ROOM_ROLLOFF_FACTOR);
+	NVAL_CONST(AL_CONE_OUTER_GAINHF,     AL_CONE_OUTER_GAINHF);
+	NVAL_CONST(AL_METERS_PER_UNIT,       AL_METERS_PER_UNIT);
+	// EAXReverb params
+	NVAL_CONST(AL_EAXREVERB_DENSITY,               AL_EAXREVERB_DENSITY);
+	NVAL_CONST(AL_EAXREVERB_DIFFUSION,             AL_EAXREVERB_DIFFUSION);
+	NVAL_CONST(AL_EAXREVERB_GAIN,                  AL_EAXREVERB_GAIN);
+	NVAL_CONST(AL_EAXREVERB_GAINHF,                AL_EAXREVERB_GAINHF);
+	NVAL_CONST(AL_EAXREVERB_GAINLF,                AL_EAXREVERB_GAINLF);
+	NVAL_CONST(AL_EAXREVERB_DECAY_TIME,            AL_EAXREVERB_DECAY_TIME);
+	NVAL_CONST(AL_EAXREVERB_DECAY_HFRATIO,         AL_EAXREVERB_DECAY_HFRATIO);
+	NVAL_CONST(AL_EAXREVERB_DECAY_LFRATIO,         AL_EAXREVERB_DECAY_LFRATIO);
+	NVAL_CONST(AL_EAXREVERB_REFLECTIONS_GAIN,      AL_EAXREVERB_REFLECTIONS_GAIN);
+	NVAL_CONST(AL_EAXREVERB_REFLECTIONS_DELAY,     AL_EAXREVERB_REFLECTIONS_DELAY);
+	NVAL_CONST(AL_EAXREVERB_REFLECTIONS_PAN,       AL_EAXREVERB_REFLECTIONS_PAN);
+	NVAL_CONST(AL_EAXREVERB_LATE_REVERB_GAIN,      AL_EAXREVERB_LATE_REVERB_GAIN);
+	NVAL_CONST(AL_EAXREVERB_LATE_REVERB_DELAY,     AL_EAXREVERB_LATE_REVERB_DELAY);
+	NVAL_CONST(AL_EAXREVERB_LATE_REVERB_PAN,       AL_EAXREVERB_LATE_REVERB_PAN);
+	NVAL_CONST(AL_EAXREVERB_ECHO_TIME,             AL_EAXREVERB_ECHO_TIME);
+	NVAL_CONST(AL_EAXREVERB_ECHO_DEPTH,            AL_EAXREVERB_ECHO_DEPTH);
+	NVAL_CONST(AL_EAXREVERB_MODULATION_TIME,       AL_EAXREVERB_MODULATION_TIME);
+	NVAL_CONST(AL_EAXREVERB_MODULATION_DEPTH,      AL_EAXREVERB_MODULATION_DEPTH);
+	NVAL_CONST(AL_EAXREVERB_AIR_ABSORPTION_GAINHF, AL_EAXREVERB_AIR_ABSORPTION_GAINHF);
+	NVAL_CONST(AL_EAXREVERB_HFREFERENCE,           AL_EAXREVERB_HFREFERENCE);
+	NVAL_CONST(AL_EAXREVERB_LFREFERENCE,           AL_EAXREVERB_LFREFERENCE);
+	NVAL_CONST(AL_EAXREVERB_ROOM_ROLLOFF_FACTOR,   AL_EAXREVERB_ROOM_ROLLOFF_FACTOR);
+	NVAL_CONST(AL_EAXREVERB_DECAY_HFLIMIT,         AL_EAXREVERB_DECAY_HFLIMIT);
+	// Distortion params
+	NVAL_CONST(AL_DISTORTION_EDGE,           AL_DISTORTION_EDGE);
+	NVAL_CONST(AL_DISTORTION_GAIN,           AL_DISTORTION_GAIN);
+	NVAL_CONST(AL_DISTORTION_LOWPASS_CUTOFF, AL_DISTORTION_LOWPASS_CUTOFF);
+	NVAL_CONST(AL_DISTORTION_EQCENTER,       AL_DISTORTION_EQCENTER);
+	NVAL_CONST(AL_DISTORTION_EQBANDWIDTH,    AL_DISTORTION_EQBANDWIDTH);
+	// Compressor / Equalizer params (were defined but never registered)
+	NVAL_CONST(AL_COMPRESSOR_ONOFF,    AL_COMPRESSOR_ONOFF);
+	NVAL_CONST(AL_EQUALIZER_LOW_GAIN,   AL_EQUALIZER_LOW_GAIN);
+	NVAL_CONST(AL_EQUALIZER_LOW_CUTOFF, AL_EQUALIZER_LOW_CUTOFF);
+	NVAL_CONST(AL_EQUALIZER_MID1_GAIN,   AL_EQUALIZER_MID1_GAIN);
+	NVAL_CONST(AL_EQUALIZER_MID1_CENTER, AL_EQUALIZER_MID1_CENTER);
+	NVAL_CONST(AL_EQUALIZER_MID1_WIDTH,  AL_EQUALIZER_MID1_WIDTH);
+	NVAL_CONST(AL_EQUALIZER_MID2_GAIN,   AL_EQUALIZER_MID2_GAIN);
+	NVAL_CONST(AL_EQUALIZER_MID2_CENTER, AL_EQUALIZER_MID2_CENTER);
+	NVAL_CONST(AL_EQUALIZER_MID2_WIDTH,  AL_EQUALIZER_MID2_WIDTH);
+	NVAL_CONST(AL_EQUALIZER_HIGH_GAIN,   AL_EQUALIZER_HIGH_GAIN);
+	NVAL_CONST(AL_EQUALIZER_HIGH_CUTOFF, AL_EQUALIZER_HIGH_CUTOFF);
+	// Ring modulator params
+	NVAL_CONST(AL_RING_MODULATOR_FREQUENCY,       AL_RING_MODULATOR_FREQUENCY);
+	NVAL_CONST(AL_RING_MODULATOR_HIGHPASS_CUTOFF, AL_RING_MODULATOR_HIGHPASS_CUTOFF);
+	NVAL_CONST(AL_RING_MODULATOR_WAVEFORM,        AL_RING_MODULATOR_WAVEFORM);
+	// Pitch shifter params
+	NVAL_CONST(AL_PITCH_SHIFTER_COARSE_TUNE, AL_PITCH_SHIFTER_COARSE_TUNE);
+	NVAL_CONST(AL_PITCH_SHIFTER_FINE_TUNE,   AL_PITCH_SHIFTER_FINE_TUNE);
+	// Autowah params
+	NVAL_CONST(AL_AUTOWAH_ATTACK_TIME,  AL_AUTOWAH_ATTACK_TIME);
+	NVAL_CONST(AL_AUTOWAH_RELEASE_TIME, AL_AUTOWAH_RELEASE_TIME);
+	NVAL_CONST(AL_AUTOWAH_RESONANCE,    AL_AUTOWAH_RESONANCE);
+	NVAL_CONST(AL_AUTOWAH_PEAK_GAIN,    AL_AUTOWAH_PEAK_GAIN);
+	// Frequency shifter params
+	NVAL_CONST(AL_FREQUENCY_SHIFTER_FREQUENCY,       AL_FREQUENCY_SHIFTER_FREQUENCY);
+	NVAL_CONST(AL_FREQUENCY_SHIFTER_LEFT_DIRECTION,  AL_FREQUENCY_SHIFTER_LEFT_DIRECTION);
+	NVAL_CONST(AL_FREQUENCY_SHIFTER_RIGHT_DIRECTION, AL_FREQUENCY_SHIFTER_RIGHT_DIRECTION);
+	// Vocal morpher params
+	NVAL_CONST(AL_VOCAL_MORPHER_PHONEMEA,               AL_VOCAL_MORPHER_PHONEMEA);
+	NVAL_CONST(AL_VOCAL_MORPHER_PHONEMEA_COARSE_TUNING, AL_VOCAL_MORPHER_PHONEMEA_COARSE_TUNING);
+	NVAL_CONST(AL_VOCAL_MORPHER_PHONEMEB,               AL_VOCAL_MORPHER_PHONEMEB);
+	NVAL_CONST(AL_VOCAL_MORPHER_PHONEMEB_COARSE_TUNING, AL_VOCAL_MORPHER_PHONEMEB_COARSE_TUNING);
+	NVAL_CONST(AL_VOCAL_MORPHER_WAVEFORM,               AL_VOCAL_MORPHER_WAVEFORM);
+	NVAL_CONST(AL_VOCAL_MORPHER_RATE,                   AL_VOCAL_MORPHER_RATE);
+	// AL_SOFT_source_resampler / AL_SOFT_loop_points
+	NVAL_CONST(AL_SOURCE_RESAMPLER_SOFT,  AL_SOURCE_RESAMPLER_SOFT);
+	NVAL_CONST(AL_NUM_RESAMPLERS_SOFT,    AL_NUM_RESAMPLERS_SOFT);
+	NVAL_CONST(AL_DEFAULT_RESAMPLER_SOFT, AL_DEFAULT_RESAMPLER_SOFT);
+	NVAL_CONST(AL_LOOP_POINTS_SOFT,       AL_LOOP_POINTS_SOFT);
 	// AL_SOFT_source_spatialize
 	NVAL_CONST(AL_SOURCE_SPATIALIZE_SOFT, AL_SOURCE_SPATIALIZE_SOFT);
 	NVAL_CONST(AL_AUTO_SOFT,             AL_AUTO_SOFT);
