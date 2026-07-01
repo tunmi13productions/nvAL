@@ -14,7 +14,9 @@ if "%NVGT_PATH%"=="" (
 set SRC=%~dp0..\src
 set OUT=%~dp0..\nval.dll
 set INC_NVGT=%NVGT_PATH%\src
-set INC_AS=%NVGT_PATH%\windev\include
+:: angelscript.h ships in the platform dev bundle (windev\include). CI can pre-set
+:: INC_AS to a directory holding just angelscript.h to avoid unpacking the whole bundle.
+if "%INC_AS%"=="" set INC_AS=%NVGT_PATH%\windev\include
 set INC_ASADDON=%NVGT_PATH%\ASAddon\include
 set SCRIPTARRAY=%NVGT_PATH%\ASAddon\plugin\scriptarray.cpp
 

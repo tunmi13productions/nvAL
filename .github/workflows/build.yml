@@ -1,0 +1,104 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # NVGT source ref the plugin headers are built against. The plugin performs a
+  # runtime API-version check (prepare_plugin in nvgt_plugin.h), so this should
+  # track the NVGT version you ship nvAL alongside. Pin to a tag for reproducible
+  # builds once you settle on a target NVGT release.
+  NVGT_REF: main
+  # Bump this to invalidate the cached angelscript.h (e.g. when NVGT upgrades its
+  # bundled AngelScript version).
+  DEP_CACHE_VERSION: v1
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            os: windows-latest
+            osdev: windev
+            artifact: nval.dll
+          - name: linux
+            os: ubuntu-22.04
+            osdev: lindev
+            artifact: nval.so
+          - name: macos
+            os: macos-14
+            osdev: macosdev
+            artifact: nval.dylib
+    steps:
+      - name: Checkout nvAL
+        uses: actions/checkout@v4
+
+      - name: Checkout NVGT (headers + scriptarray)
+        uses: actions/checkout@v4
+        with:
+          repository: samtupy/nvgt
+          ref: ${{ env.NVGT_REF }}
+          path: nvgt
+
+      # angelscript.h is the only external header the plugin needs. It is not in the
+      # NVGT repo (the dev bundles are gitignored), so pull just that one file out of
+      # the platform dev bundle and cache it -- avoids re-downloading the full bundle.
+      - name: Cache angelscript.h
+        id: cache_as
+        uses: actions/cache@v4
+        with:
+          path: as_include
+          key: ${{ matrix.osdev }}-angelscript-${{ env.DEP_CACHE_VERSION }}
+
+      - name: Fetch angelscript.h from ${{ matrix.osdev }} bundle
+        if: steps.cache_as.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -e
+          mkdir -p devextract as_include
+          url="https://nvgt.dev/${{ matrix.osdev }}.zip"
+          echo "Downloading $url"
+          curl -fL -o dev.zip "$url"
+          # Bundles are normally zip; fall back to tar.gz just in case.
+          if unzip -q dev.zip -d devextract 2>/dev/null; then :; else tar -xzf dev.zip -C devextract; fi
+          as_h="$(find devextract -name angelscript.h | head -1)"
+          if [ -z "$as_h" ]; then echo "angelscript.h not found in bundle"; exit 1; fi
+          cp "$as_h" as_include/
+          echo "Extracted $as_h"
+
+      - name: Build (Windows)
+        if: matrix.name == 'windows'
+        shell: cmd
+        env:
+          INC_AS: ${{ github.workspace }}\as_include
+        run: build\build.bat "%GITHUB_WORKSPACE%\nvgt"
+
+      - name: Build (Unix)
+        if: matrix.name != 'windows'
+        shell: bash
+        env:
+          INC_AS: ${{ github.workspace }}/as_include
+        run: |
+          chmod +x build/build.sh
+          ./build/build.sh "$GITHUB_WORKSPACE/nvgt"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact }}
