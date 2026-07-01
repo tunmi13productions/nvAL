@@ -15,13 +15,27 @@ Wraps OpenAL via dynamic loading — no import library required, just drop `open
 - **HRTF** — head-related transfer function via ALC_SOFT_HRTF (openal-soft)
 - **Capture** — microphone input via the ALC capture extension
 
+## Prebuilt binaries
+
+You don't need to build nvAL yourself. Every [release](https://github.com/tunmi13productions/nvAL/releases) ships all three platform plugins, built by CI:
+
+| Platform | File | Runtime OpenAL library to ship alongside |
+|----------|------|------------------------------------------|
+| Windows | `nval.dll` | `openal32.dll` |
+| Linux | `nval.so` | `libopenal.so.1` |
+| macOS (arm64) | `nval.dylib` | `libopenal.dylib` |
+
+Drop the plugin for your platform next to `nvgt.exe` (or your compiled game). OpenAL is loaded dynamically at runtime, so there is no import library — just make sure the OpenAL runtime library above is present.
+
 ## Building
 
 ### Requirements
 
-- [NVGT](https://nvgt.dev) source or SDK (for `nvgt_plugin.h` and `angelscript.h`)
-- Windows: Visual Studio 2019+ Build Tools
-- Linux/macOS: GCC or Clang
+- A checkout of the [NVGT **source** repo](https://github.com/samtupy/nvgt) (not an installed copy) — provides `src/nvgt_plugin.h` and `ASAddon/` (`scriptarray.h` + the plugin `scriptarray.cpp`).
+- `angelscript.h` — the only external header. It is **not** committed to the NVGT repo; it ships in the platform dev bundle, downloadable from [nvgt.dev](https://nvgt.dev): [`windev.zip`](https://nvgt.dev/windev.zip) / [`lindev.zip`](https://nvgt.dev/lindev.zip) / [`macosdev.zip`](https://nvgt.dev/macosdev.zip). Extract the matching one in the NVGT repo root so you have e.g. `nvgt/windev/include/angelscript.h`.
+- Windows: Visual Studio 2019+ Build Tools. Linux/macOS: GCC or Clang.
+
+OpenAL is `dlopen`/`LoadLibrary`'d at runtime, so **no OpenAL SDK or import library is needed to build** — the bundled openal-soft headers under `src/AL` supply the types and constants.
 
 ### Windows
 
@@ -30,7 +44,7 @@ cd build
 build.bat C:\path\to\nvgt
 ```
 
-This produces `nval.dll` in the repo root.
+Produces `nval.dll` in the repo root.
 
 ### Linux / macOS
 
@@ -39,9 +53,26 @@ cd build
 ./build.sh /path/to/nvgt
 ```
 
+Produces `nval.so` (Linux) or `nval.dylib` (macOS), detected from `uname`, in the repo root.
+
+To point at an `angelscript.h` that isn't inside the dev bundle, set `INC_AS` to a directory containing it (both scripts honor this):
+
+```bash
+INC_AS=/path/with/angelscript.h ./build.sh /path/to/nvgt
+```
+
 ### As an NVGT plugin (SCons)
 
 Copy or symlink this repo into `nvgt/plugin/nvAL/`, then build NVGT normally. The `_SConscript` at the repo root handles it.
+
+## Continuous integration
+
+[`.github/workflows/build.yml`](.github/workflows/build.yml) builds all three platforms on native GitHub-hosted runners (Windows, Linux, macOS). It checks out the NVGT source, pulls just `angelscript.h` out of the matching dev bundle (cached), runs the build script above, and uploads each binary as a run artifact.
+
+- **Every push to `main` / pull request** rebuilds all three; download them from the run's artifacts (`gh run download --repo tunmi13productions/nvAL`).
+- **Pushing a tag** (e.g. `git push origin v0.1.0`) additionally publishes a GitHub Release with all three binaries attached.
+
+The `NVGT_REF` variable at the top of the workflow pins which NVGT version the plugin is built against. Because the plugin performs a runtime API-version check, keep this in step with the NVGT version you ship alongside.
 
 ## Usage
 
