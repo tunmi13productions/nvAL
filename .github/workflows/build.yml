@@ -7,6 +7,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Needed so the tag-triggered release step can create/update the GitHub Release.
+permissions:
+  contents: write
+
 env:
   # NVGT source ref the plugin headers are built against. The plugin performs a
   # runtime API-version check (prepare_plugin in nvgt_plugin.h), so this should
