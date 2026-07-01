@@ -39,10 +39,10 @@ jobs:
             artifact: nval.dylib
     steps:
       - name: Checkout nvAL
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Checkout NVGT (headers + scriptarray)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: samtupy/nvgt
           ref: ${{ env.NVGT_REF }}
@@ -53,7 +53,7 @@ jobs:
       # the platform dev bundle and cache it -- avoids re-downloading the full bundle.
       - name: Cache angelscript.h
         id: cache_as
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: as_include
           key: ${{ matrix.osdev }}-angelscript-${{ env.DEP_CACHE_VERSION }}
@@ -91,7 +91,7 @@ jobs:
           ./build/build.sh "$GITHUB_WORKSPACE/nvgt"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
@@ -99,6 +99,6 @@ jobs:
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{ matrix.artifact }}
